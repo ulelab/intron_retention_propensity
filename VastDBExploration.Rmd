@@ -1,0 +1,14 @@
+---
+title: "VastDBExploration"
+output: html_document
+author: Michael K. Jones
+---
+
+# VastDB Exploration of Intron Retention
+
+```{r}
+eventInfo <- read.table("data/EVENT_INFO-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+eventMetrics <- read.table("data/EVENT_METRICS-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+expressionTable <- read.table("data/EXPRESSION_TABLE-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+psiTable <- read.table("data/PSI_TABLE-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+```
