@@ -1,14 +1,64 @@
 ---
 title: "VastDBExploration"
+author: "Michael K. Jones"
 output: html_document
-author: Michael K. Jones
 ---
-
 # VastDB Exploration of Intron Retention
 
+download.file("https://vastdb.crg.eu/downloads/hg38/EVENT_INFO-hg38.tab.gz", destfile = "EVENT_INFO-hg38.tab.gz", method = "libcurl")
+download.file("https://vastdb.crg.eu/downloads/hg38/EVENT_METRICS-hg38.tab.gz", destfile = "EVENT_METRICS-hg38.tab.gz", method = "libcurl")
+download.file("https://vastdb.crg.eu/downloads/hg38/PSI_TABLE-hg38.tab.gz", destfile = "PSI_TABLE-hg38.tab.gz", method = "libcurl")
+download.file("https://vastdb.crg.eu/downloads/hg38/EXPRESSION_TABLE-hg38.tab.gz", destfile = "EXPRESSION_TABLE-hg38.tab.gz", method = "libcurl")
+
 ```{r}
-eventInfo <- read.table("data/EVENT_INFO-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-eventMetrics <- read.table("data/EVENT_METRICS-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-expressionTable <- read.table("data/EXPRESSION_TABLE-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-psiTable <- read.table("data/PSI_TABLE-hg38.tab", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+library(ggplot2)
+library(data.table)
+library(edgeR)
+library(DESeq2)
+library(limma)
+library(tximport)
+library(pheatmap)
+library(BiocGenerics)
+
+eventInfo <- fread("EVENT_INFO-hg38.tab.gz")
+eventMetrics <- fread("EVENT_METRICS-hg38.tab.gz")
+psiTable <- fread("PSI_TABLE-hg38.tab.gz")
+expressionTable <- fread("EXPRESSION_TABLE-hg38.tab.gz")
+
+# Plot a histogram of average PSI values
+
+psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]                  # Filter psiTable to IR events
+mergedPsi <- merge(psiHsaIN, eventMetrics, by = "EVENT", all.x = TRUE)  # Merge with eventMetrics for average values
+psi_matrix <- as.matrix(mergedPsi[, -1, with = FALSE])                  # remove non-numeric values
+rownames(psi_matrix) <- mergedPsi$EVENT                                 # extract PSI values
+
+ggplot(mergedPsi, aes(x = Average)) +
+    geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
+    labs(title = "Distribution of Average PSI Values",
+         x = "Average PSI (%)",
+         y = "Count of Splicing Events") +
+    theme_minimal()
+
+# Plot a PCA by removing QC columns
+
+cols_to_exclude <- c(3:6, grep("-Q$", colnames(filteredPsi)),           # Remove columns with COORD, LENGTH, FullCO, and COMPLEX and summary statistics
+                     (ncol(filteredPsi)-3):ncol(filteredPsi))
+psi_data <- filteredPsi[, -cols_to_exclude, with = FALSE]
+psi_matrix <- as.matrix(psi_data[, -c("EVENT", "GENE"), with = FALSE])
+rownames(psi_matrix) <- psi_data$EVENT
+psi_t <- t(psi_matrix)
+psi_t_clean <- psi_t[, apply(psi_t, 2, function(x) var(x, na.rm = TRUE) > 0 & !all(is.na(x)))]
+psi_t_clean[is.na(psi_t_clean)] <- 0                                    # Set NA values to 0
+pca <- prcomp(psi_t_clean, scale. = TRUE, center = TRUE)
+
+var_explained <- pca$sdev^2 / sum(pca$sdev^2) * 100                     # Calculate variance of PC1 and PC2
+pc1_label <- paste0("PC1 (", round(var_explained[1], 1), "%)")
+pc2_label <- paste0("PC2 (", round(var_explained[2], 1), "%)")
+
+plot(pca$x[, 1:2],
+     xlab = pc1_label, ylab = pc2_label,
+     main = "PCA of PSI for Events with Average PSI > 20 (NA → 0)",
+     pch = 16)
+
+
 ```
