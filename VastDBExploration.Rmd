@@ -3,18 +3,16 @@ title: "VastDBExploration"
 author: "Michael K. Jones"
 output: html_document
 ---
+
 # VastDB Exploration of Intron Retention
 
-download.file("https://vastdb.crg.eu/downloads/hg38/EVENT_INFO-hg38.tab.gz", destfile = "EVENT_INFO-hg38.tab.gz", method = "libcurl")
-download.file("https://vastdb.crg.eu/downloads/hg38/EVENT_METRICS-hg38.tab.gz", destfile = "EVENT_METRICS-hg38.tab.gz", method = "libcurl")
-download.file("https://vastdb.crg.eu/downloads/hg38/PSI_TABLE-hg38.tab.gz", destfile = "PSI_TABLE-hg38.tab.gz", method = "libcurl")
-download.file("https://vastdb.crg.eu/downloads/hg38/EXPRESSION_TABLE-hg38.tab.gz", destfile = "EXPRESSION_TABLE-hg38.tab.gz", method = "libcurl")
+download.file("<https://vastdb.crg.eu/downloads/hg38/EVENT_INFO-hg38.tab.gz>", destfile = "EVENT_INFO-hg38.tab.gz", method = "libcurl") download.file("<https://vastdb.crg.eu/downloads/hg38/EVENT_METRICS-hg38.tab.gz>", destfile = "EVENT_METRICS-hg38.tab.gz", method = "libcurl") download.file("<https://vastdb.crg.eu/downloads/hg38/PSI_TABLE-hg38.tab.gz>", destfile = "PSI_TABLE-hg38.tab.gz", method = "libcurl") download.file("<https://vastdb.crg.eu/downloads/hg38/EXPRESSION_TABLE-hg38.tab.gz>", destfile = "EXPRESSION_TABLE-hg38.tab.gz", method = "libcurl")
+
+install.packages("remotes") remotes::install_version("Matrix", version = "1.5-4", repos = "<https://cloud.r-project.org>") remotes::install_version("MASS", version = "7.3-60", repos = "<https://cloud.r-project.org>") install.packages("BiocManager")
 
 ```{r}
 library(ggplot2)
 library(data.table)
-library(edgeR)
-library(DESeq2)
 library(limma)
 library(tximport)
 library(pheatmap)
@@ -25,24 +23,107 @@ eventMetrics <- fread("EVENT_METRICS-hg38.tab.gz")
 psiTable <- fread("PSI_TABLE-hg38.tab.gz")
 expressionTable <- fread("EXPRESSION_TABLE-hg38.tab.gz")
 
-# Plot a histogram of average PSI values
+# Create table containing only IR events, merge with summary statistics for exploration
 
-psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]                  # Filter psiTable to IR events
-mergedPsi <- merge(psiHsaIN, eventMetrics, by = "EVENT", all.x = TRUE)  # Merge with eventMetrics for average values
-psi_matrix <- as.matrix(mergedPsi[, -1, with = FALSE])                  # remove non-numeric values
-rownames(psi_matrix) <- mergedPsi$EVENT                                 # extract PSI values
+psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]                
+mergedPsi <- merge(psiHsaIN, eventMetrics, by = "EVENT", all.x = TRUE)  
 
-ggplot(mergedPsi, aes(x = Average)) +
+# Histogram of Max PSI across all IR Events
+
+ggplot(mergedPsi, aes(x = Max)) +
     geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
-    labs(title = "Distribution of Average PSI Values",
+    labs(title = "Distribution of Max PSI Values",
          x = "Average PSI (%)",
          y = "Count of Splicing Events") +
     theme_minimal()
 
+# Remove Meta data and Quality measures(-Q$), set NA to 0
+
+meta_cols <- c("EVENT", "GENE", "COORD", "LENGTH", "FullCO", "COMPLEX")
+psi_valuesonly <- psiHsaIN[, !colnames(psiHsaIN) %in% meta_cols & !grepl("-Q$", colnames(psiHsaIN)), with = FALSE]
+psi_valuesonly[is.na(psi_valuesonly)] <- 0
+
+# Histogram of ALL PSI values (unlisted vector)
+
+psi_values_vector <- unlist(psi_valuesonly[, -1, with = FALSE], use.names = FALSE)
+
+ggplot(data.frame(PSI = psi_values_vector), aes(x = PSI)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of All PSI Values",
+       x = "PSI (%)",
+       y = "Frequency") +
+  theme_minimal()
+
+# Calculate IR Events in mergedPsi with Max of 1 or less, filter from table
+
+sum(ifelse(is.na(mergedPsi$Max), TRUE, mergedPsi$Max <= 1))
+filteredPsi <- copy(mergedPsi)
+rownames(filteredPsi) <- filteredPsi$EVENT
+filteredPsi <- mergedPsi[, !colnames(mergedPsi) %in% meta_cols & !grepl("-Q$", colnames(mergedPsi)), with = FALSE]
+filteredPsi <- filteredPsi[!(is.na(Max) | Max < 1)]
+filteredPsi[is.na(filteredPsi)] <- 0
+filteredPsi <- filteredPsi[, -c(146:149), with = FALSE]
+
+# Plot heatmap from 
+
+filteredMatrix <- as.matrix(filteredPsi)
+pheatmap(filteredMatrix,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         scale = "none",
+         color = colorRampPalette(c("navy", "white", "firebrick"))(100),
+         main = "Intron Retention Heatmap (Filtered Events)")
+
+# Use PSI value of 15 to binarize retention and visualize
+
+cols_to_binarize <- setdiff(colnames(psi_valuesonly), meta_cols)
+binaryPsi <- copy(filteredPsi)
+cols_target <- names(psi_binary)[7:151]
+psi_binary[, (cols_target) := lapply(.SD, function(x) fifelse(is.na(x), 0L, x)), .SDcols = cols_target]       # Set NA to 0
+psi_binary[, (cols_to_binarize) := lapply(.SD, function(x) ifelse(x < 20, 0, 1)), .SDcols = cols_to_binarize]
+
+# Get IR event counts across all samples
+
+sample_retention_counts <- colSums(psi_binary[, ..cols_target])
+psi_binary[, event_retained_in := rowSums(.SD), .SDcols = cols_target] # Add column for sum across samples
+
+# Plot Histogram of IR events occurrence for every sample type
+
+ggplot(psi_binary, aes(x = event_retained_in)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
+  labs(title = "Number of Samples per Intron Retention Event (PSI ≥ 20)",
+       x = "Samples with IR (PSI ≥ 20)",
+       y = "Count of IR Events") +
+  theme_minimal()
+
+# Check the number of IR events for each sample
+
+sample_ir_counts <- colSums(psi_binary[, ..cols_target])
+sample_ir_df <- data.frame(Sample = names(sample_ir_counts),
+                           IR_Event_Count = as.integer(sample_ir_counts))
+
+# Group samples by young and mature
+
+young_prefixes <- c("Amnion", "Embr", "ESC", "iPS", "MSC", "NCC", "NPC", "Oocyte", "Pancreas_Alpha_Young", "Panceas_Beta_Young", "Placenta", "Young", "Zygote")    
+sample_ir_df$Group <- ifelse(grepl(paste0("^(", paste(young_prefixes, collapse = "|"), ")"),
+                                   sample_ir_df$Sample),
+                             "young", "mature")
+
+ggplot(sample_ir_df, aes(y = reorder(Sample, IR_Event_Count), x = IR_Event_Count, fill = Group)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Intron Retention Events per Sample (PSI ≥ 20)",
+       y = "Sample",
+       x = "Number of IR Events",
+       fill = "Group") +
+  scale_fill_manual(values = c("young" = "firebrick", "mature" = "darkgreen")) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 7))
+
 # Plot a PCA by removing QC columns
 
-cols_to_exclude <- c(3:6, grep("-Q$", colnames(filteredPsi)),           # Remove columns with COORD, LENGTH, FullCO, and COMPLEX and summary statistics
-                     (ncol(filteredPsi)-3):ncol(filteredPsi))
+filteredPsi <- mergedPsi[Average > 20]
 psi_data <- filteredPsi[, -cols_to_exclude, with = FALSE]
 psi_matrix <- as.matrix(psi_data[, -c("EVENT", "GENE"), with = FALSE])
 rownames(psi_matrix) <- psi_data$EVENT
