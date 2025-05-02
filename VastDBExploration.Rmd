@@ -13,10 +13,9 @@ install.packages("remotes") remotes::install_version("Matrix", version = "1.5-4"
 ```{r}
 library(ggplot2)
 library(data.table)
-library(limma)
-library(tximport)
+library(hexbin)
 library(pheatmap)
-library(BiocGenerics)
+
 
 eventInfo <- fread("EVENT_INFO-hg38.tab.gz")
 eventMetrics <- fread("EVENT_METRICS-hg38.tab.gz")
@@ -26,16 +25,21 @@ expressionTable <- fread("EXPRESSION_TABLE-hg38.tab.gz")
 # Create table containing only IR events, merge with summary statistics for exploration
 
 psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]                
-mergedPsi <- merge(psiHsaIN, eventMetrics, by = "EVENT", all.x = TRUE)  
+mergedPsi <- merge(psiHsaIN, eventMetrics, by = "EVENT", all.x = TRUE)
+rownames(mergedPsi) <- mergedPsi$EVENT
+rn <- rownames(mergedPsi)
 
-# Histogram of Max PSI across all IR Events
+# Check correlation of LENGTH and Max with Hexbin
 
-ggplot(mergedPsi, aes(x = Max)) +
-    geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
-    labs(title = "Distribution of Max PSI Values",
-         x = "Average PSI (%)",
-         y = "Count of Splicing Events") +
-    theme_minimal()
+retention_df <- mergedPsi[!is.na(Max) & !is.na(LENGTH)]
+ggplot(retention_df, aes(x = LENGTH, y = Max)) +
+  stat_binhex(bins = 100) +
+  scale_fill_viridis_c(trans = "log", name = "Count") +
+  scale_x_log10() +
+  labs(title = "Intron Length vs Max PSI (Hexbin)",
+       x = "Intron Length (log10)",
+       y = "Max PSI") +
+  theme_minimal()
 
 # Remove Meta data and Quality measures(-Q$), set NA to 0
 
@@ -54,66 +58,140 @@ ggplot(data.frame(PSI = psi_values_vector), aes(x = PSI)) +
        y = "Frequency") +
   theme_minimal()
 
-# Calculate IR Events in mergedPsi with Max of 1 or less, filter from table
+# Compute intron length and determine decile breakpoints
+
+length_breaks <- quantile(retention_df$LENGTH, probs = seq(0, 1, 0.1), na.rm = TRUE)
+decile_labels <- sapply(1:10, function(i) {
+  lower <- format(round(length_breaks[i], 0), scientific = FALSE)
+  upper <- format(round(length_breaks[i + 1], 0), scientific = FALSE)
+  paste0("Q", i, "\n(", lower, "–", upper, ")")
+})
+retention_df$length_bin <- cut(retention_df$LENGTH,
+                                breaks = length_breaks,
+                                include.lowest = TRUE,
+                                labels = decile_labels)
+
+# Plot intron length deciles as box plots
+
+ggplot(retention_df, aes(x = length_bin, y = Max, fill = length_bin)) +
+  geom_boxplot(outlier.shape = NA) +
+  stat_summary(fun = median, geom = "point", color = "black", size = 2) +
+  labs(title = "Max PSI by Intron Length Deciles",
+       x = "Intron Length Bin (Decile + Range)",
+       y = "Max PSI",
+       fill = "Length Bin") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") 
+
+# Histogram of Max PSI across all IR Events
+
+ggplot(mergedPsi, aes(x = Max)) +
+    geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
+    labs(title = "Distribution of Max PSI Values",
+         x = "Average PSI (%)",
+         y = "Count of Splicing Events") +
+    theme_minimal()
+
+# Calculate IR Events in mergedPsi with Max of 1 or less, remove quality columns, and remove summary stats
 
 sum(ifelse(is.na(mergedPsi$Max), TRUE, mergedPsi$Max <= 1))
-filteredPsi <- copy(mergedPsi)
-rownames(filteredPsi) <- filteredPsi$EVENT
-filteredPsi <- mergedPsi[, !colnames(mergedPsi) %in% meta_cols & !grepl("-Q$", colnames(mergedPsi)), with = FALSE]
-filteredPsi <- filteredPsi[!(is.na(Max) | Max < 1)]
-filteredPsi[is.na(filteredPsi)] <- 0
-filteredPsi <- filteredPsi[, -c(146:149), with = FALSE]
+summaryvaluesPsi <- copy(mergedPsi)
+summaryvaluesPsi <- mergedPsi[, !grepl("-Q$", colnames(mergedPsi)), with = FALSE]
+summaryvaluesPsi[is.na(summaryvaluesPsi)] <- 0
+valuesPsi <- summaryvaluesPsi[, -c(152:155), with = FALSE]
+valuesPsi <- valuesPsi[, -c(1:6), with = FALSE]
+rownames(valuesPsi) <- rn
 
-# Plot heatmap from 
+# Store a never retained object and create a low variance (< 5) and low IQR group
 
-filteredMatrix <- as.matrix(filteredPsi)
-pheatmap(filteredMatrix,
+never_retained <- summaryvaluesPsi$Max <= 1
+never_retained_ids <- rownames(mergedPsi)[never_retained]
+summary(never_retained)
+psi_var <- apply(valuesPsi, 1, var, na.rm = TRUE)
+stable_introns <- psi_var < 5
+psi_iqr <- apply(valuesPsi, 1, IQR, na.rm = TRUE)
+stable_iqr <- psi_iqr < 10
+stable_both <- stable_introns & stable_iqr
+summary(stable_both)
+stable_introns_ids <- rownames(valuesPsi)[stable_both]
+length(intersect(never_retained_ids, stable_introns_ids))
+
+# Remove never retained group from stable group, label groups
+
+stable_introns_ids <- setdiff(stable_introns_ids, never_retained_ids)
+all_events <- rownames(valuesPsi)
+
+group <- ifelse(all_events %in% never_retained_ids, "never",
+         ifelse(all_events %in% stable_introns_ids, "stable", "variable"))
+
+intron_group_df <- data.frame(EVENT = all_events, group = group, row.names = all_events)
+table(intron_group_df$group)
+
+# Isolate variable introns for clustering
+
+variable_ids <- intron_group_df$EVENT[intron_group_df$group == "variable"]
+valuesPsi_df <- as.data.frame(valuesPsi)
+rownames(valuesPsi_df) <- rn
+variable_matrix <- valuesPsi_df[variable_ids, ]
+
+# Cluster with k = 6 and label
+
+set.seed(43)
+kmeans_res <- kmeans(variable_matrix, centers = 6)
+cluster_labels <- kmeans_res$cluster
+intron_group_df$cluster <- NA
+intron_group_df[variable_ids, "cluster"] <- paste0("Cluster_", cluster_labels)
+
+# Plot heatmap with combined annotation of rows
+
+row_annot <- intron_group_df[rownames(variable_matrix), , drop = FALSE]
+
+pheatmap(variable_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
          show_rownames = FALSE,
          show_colnames = FALSE,
-         cluster_rows = TRUE,
-         cluster_cols = TRUE,
-         scale = "none",
-         color = colorRampPalette(c("navy", "white", "firebrick"))(100),
-         main = "Intron Retention Heatmap (Filtered Events)")
+         annotation_row = row_annot[, c("group", "cluster"), drop = FALSE],
+         color = colorRampPalette(c("dodgerblue", "white", "firebrick"))(100),
+         main = "Variable Intron Retention Clusters")
 
 # Use PSI value of 15 to binarize retention and visualize
 
-cols_to_binarize <- setdiff(colnames(psi_valuesonly), meta_cols)
 binaryPsi <- copy(filteredPsi)
-cols_target <- names(psi_binary)[7:151]
-psi_binary[, (cols_target) := lapply(.SD, function(x) fifelse(is.na(x), 0L, x)), .SDcols = cols_target]       # Set NA to 0
-psi_binary[, (cols_to_binarize) := lapply(.SD, function(x) ifelse(x < 20, 0, 1)), .SDcols = cols_to_binarize]
+binaryPsi <- as.data.frame(lapply(binaryPsi, function(col) ifelse(col >= 15, 1, 0)))
+binaryPsi_mat <- as.matrix(binaryPsi)
 
 # Get IR event counts across all samples
 
-sample_retention_counts <- colSums(psi_binary[, ..cols_target])
-psi_binary[, event_retained_in := rowSums(.SD), .SDcols = cols_target] # Add column for sum across samples
+sample_retention_counts <- rowSums(binaryPsi)
+binaryPsiCounts <- cbind(binaryPsi, sample_retention_counts)
 
-# Plot Histogram of IR events occurrence for every sample type
+# Plot Histogram of sample types with binarized IR events occurrence
 
-ggplot(psi_binary, aes(x = event_retained_in)) +
+ggplot(binaryPsiCounts, aes(x = sample_retention_counts)) +
   geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
-  labs(title = "Number of Samples per Intron Retention Event (PSI ≥ 20)",
-       x = "Samples with IR (PSI ≥ 20)",
+  labs(title = "Number of Samples per Intron Retention Event (PSI ≥ 15)",
+       x = "Samples with IR (PSI ≥ 15)",
        y = "Count of IR Events") +
   theme_minimal()
 
 # Check the number of IR events for each sample
 
-sample_ir_counts <- colSums(psi_binary[, ..cols_target])
+sample_ir_counts <- colSums(binaryPsi)
 sample_ir_df <- data.frame(Sample = names(sample_ir_counts),
                            IR_Event_Count = as.integer(sample_ir_counts))
 
 # Group samples by young and mature
 
-young_prefixes <- c("Amnion", "Embr", "ESC", "iPS", "MSC", "NCC", "NPC", "Oocyte", "Pancreas_Alpha_Young", "Panceas_Beta_Young", "Placenta", "Young", "Zygote")    
+young_prefixes <- c("Amnion", "Embr", "ESC", "iPS", "MSC", "NCC", "NPC", "Oocyte", "Pancreas_Alpha_Young", "Pancreas_Beta_Young", "Placenta", "Young", "Zygote")    
 sample_ir_df$Group <- ifelse(grepl(paste0("^(", paste(young_prefixes, collapse = "|"), ")"),
                                    sample_ir_df$Sample),
                              "young", "mature")
 
 ggplot(sample_ir_df, aes(y = reorder(Sample, IR_Event_Count), x = IR_Event_Count, fill = Group)) +
   geom_bar(stat = "identity") +
-  labs(title = "Total Intron Retention Events per Sample (PSI ≥ 20)",
+  labs(title = "Total Intron Retention Events per Sample (PSI ≥ 15)",
        y = "Sample",
        x = "Number of IR Events",
        fill = "Group") +
@@ -123,23 +201,20 @@ ggplot(sample_ir_df, aes(y = reorder(Sample, IR_Event_Count), x = IR_Event_Count
 
 # Plot a PCA by removing QC columns
 
-filteredPsi <- mergedPsi[Average > 20]
-psi_data <- filteredPsi[, -cols_to_exclude, with = FALSE]
-psi_matrix <- as.matrix(psi_data[, -c("EVENT", "GENE"), with = FALSE])
-rownames(psi_matrix) <- psi_data$EVENT
-psi_t <- t(psi_matrix)
-psi_t_clean <- psi_t[, apply(psi_t, 2, function(x) var(x, na.rm = TRUE) > 0 & !all(is.na(x)))]
-psi_t_clean[is.na(psi_t_clean)] <- 0                                    # Set NA values to 0
-pca <- prcomp(psi_t_clean, scale. = TRUE, center = TRUE)
+#filteredPsi <- mergedPsi[Average > 20]
+#rownames(psi_matrix) <- psi_data$EVENT
+#psi_t <- t(psi_matrix)
+#psi_t_clean <- psi_t[, apply(psi_t, 2, function(x) var(x, na.rm = TRUE) > 0 & !all(is.na(x)))]
+#pca <- prcomp(psi_t_clean, scale. = TRUE, center = TRUE)
 
-var_explained <- pca$sdev^2 / sum(pca$sdev^2) * 100                     # Calculate variance of PC1 and PC2
-pc1_label <- paste0("PC1 (", round(var_explained[1], 1), "%)")
-pc2_label <- paste0("PC2 (", round(var_explained[2], 1), "%)")
+#var_explained <- pca$sdev^2 / sum(pca$sdev^2) * 100                     # Calculate variance of PC1 and PC2
+#pc1_label <- paste0("PC1 (", round(var_explained[1], 1), "%)")
+#pc2_label <- paste0("PC2 (", round(var_explained[2], 1), "%)")
 
-plot(pca$x[, 1:2],
-     xlab = pc1_label, ylab = pc2_label,
-     main = "PCA of PSI for Events with Average PSI > 20 (NA → 0)",
-     pch = 16)
+#plot(pca$x[, 1:2],
+#     xlab = pc1_label, ylab = pc2_label,
+#     main = "PCA of PSI for Events with Average PSI > 20 (NA → 0)",
+#     pch = 16)
 
 
 ```
