@@ -1,0 +1,9 @@
+fasta_file: /scratch/prj/ppn_rnp_networks/shared/references/genomes/homo_sapiens/GRCh38-EnsembleRelease109/Homo_sapiens.GRCh38.fasta
+
+task_specs:
+  PRPF8_siControl:
+    main:
+      - /scratch/prj/ppn_rnp_networks/users/mike.jones/software/RBPnet/merged.pos.bw
+      - /scratch/prj/ppn_rnp_networks/users/mike.jones/software/RBPnet/merged.neg.bw
+    peaks: /scratch/prj/ppn_rnp_networks/users/mike.jones/software/RBPnet/PRPF8_rollmean10_minHeightAdjust4.0_minPromAdjust1.5_minGeneCount5_Peaks.bed
+
