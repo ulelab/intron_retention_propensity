@@ -1,0 +1,9 @@
+fasta_file: Homo_sapiens.GRCh38.fasta
+
+task_specs:
+  PRPF8_siControl:
+    main:
+      - merged.pos.bw
+      - merged.neg.bw
+    peaks: PRPF8_peaks_300bp.bed
+

@@ -1,0 +1,172 @@
+---
+title: "ExpressionFilteredHeatmap"
+author: "Michael K. Jones"
+date: "2025-05-16"
+output: html_document
+---
+# VastDB Expression filtered Intron Retention Events
+
+## Remove IR events below 25th percentile from heatmap
+
+```{r}
+library(data.table)
+library(pheatmap)
+library(dplyr)
+library(stringr)
+library(tidyr)
+expressionTable <- fread("data/EXPRESSION_TABLE-hg38.tab")
+psiTable <- fread("data/PSI_TABLE-hg38.tab")
+
+```
+
+```{r}
+# Create table containing only IR events, merge with summary statistics for exploration
+psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]
+rownames(psiHsaIN) <- psiHsaIN$EVENT
+rn <- rownames(psiHsaIN)
+
+# Remove Meta data and Quality measures (-Q$)
+metaPsi <- psiHsaIN[, !grepl("-Q$", colnames(psiHsaIN)), with = FALSE]
+rownames(metaPsi) <- metaPsi$EVENT
+
+# Create cleaned version of expressionTable
+expressionClean <- expressionTable[, !("ID"), with = FALSE]
+expressionClean <- expressionClean[, !grepl("-Counts$", colnames(expressionClean)), with = FALSE]
+setnames(expressionClean, "NAME", "GENE")
+
+# Add _PSI to PSI columns
+psiColsToRename <- colnames(metaPsi)[7:151]
+setnames(metaPsi, psiColsToRename, paste0(psiColsToRename, "_PSI"))
+
+# Identify rows where every value is NA and remove those rows for both meta and values Psi tables
+all_na_rows <- apply(metaPsi[, 7:151], 1, function(x) all(is.na(x)))
+metaPsi <- metaPsi[!all_na_rows, ]
+
+# Convert to matrix and preserve rownames
+meta_cols <- c("EVENT", "COORD", "LENGTH", "FullCO", "COMPLEX")  # GENE retained
+cleanPsi <- metaPsi[, !colnames(metaPsi) %in% meta_cols, with = FALSE]
+valuesPsi <- as.matrix(cleanPsi[, !("GENE"), with = FALSE])
+rownames(valuesPsi) <- metaPsi$EVENT
+
+valuesMatrix <- as.matrix(valuesPsi)
+rownames(valuesMatrix) <- rownames(metaPsi)
+
+# Filter rows with >80% NAs
+rowNAfraction <- rowMeans(is.na(valuesMatrix))
+filteredMatrix <- valuesMatrix[rowNAfraction < 0.8, ]
+rownames(filteredMatrix) <- rownames(valuesMatrix)[rowNAfraction < 0.8]
+
+```
+
+```{r}
+# Impute NAs using row medians
+imputeMatrix <- filteredMatrix  # copy to preserve original NA structure
+for (i in 1:nrow(imputeMatrix)) {
+  row_na <- is.na(imputeMatrix[i, ])
+  if (any(row_na)) {
+    imputeMatrix[i, row_na] <- median(imputeMatrix[i, ], na.rm = TRUE)
+  }
+}
+
+# K-means clustering (k = 4) on imputed matrix
+set.seed(43)
+kmeansRes <- kmeans(imputeMatrix, centers = 4)
+clusterLabels <- data.frame(cluster = factor(paste0("Cluster_", kmeansRes$cluster),
+                                             levels = paste0("Cluster_", 1:4)))
+rownames(clusterLabels) <- rownames(imputeMatrix)
+
+# Order matrix rows by cluster
+orderedRows <- rownames(clusterLabels)[order(clusterLabels$cluster)]
+matrixOrdered <- filteredMatrix[orderedRows, ]
+rowAnnotOrdered <- clusterLabels[orderedRows, , drop = FALSE]
+
+# Add cluster labels back to cleanPsi from imputed dataset
+cleanPsiWithClusters <- cleanPsi[rownames(cleanPsi) %in% rownames(clusterLabels)]
+cleanPsiWithClusters$CLUSTER <- clusterLabels[rownames(cleanPsiWithClusters), "cluster"]
+cleanPsiWithClusters <- cleanPsiWithClusters[!is.na(cleanPsiWithClusters$CLUSTER), ]
+```
+
+```{r}
+# K-means clustering on imputed matrix
+imputeMatrix <- filteredMatrix
+for (i in 1:nrow(imputeMatrix)) {
+  row_na <- is.na(imputeMatrix[i, ])
+  if (any(row_na)) {
+    imputeMatrix[i, row_na] <- median(imputeMatrix[i, ], na.rm = TRUE)
+  }
+}
+
+set.seed(43)
+kmeansRes <- kmeans(imputeMatrix, centers = 4)
+clusterLabels <- data.frame(cluster = factor(paste0("Cluster_", kmeansRes$cluster),
+                                             levels = paste0("Cluster_", 1:4)))
+rownames(clusterLabels) <- rownames(imputeMatrix)
+
+# Order matrix rows by cluster
+orderedRows <- rownames(clusterLabels)[order(clusterLabels$cluster)]
+matrixOrdered <- filteredMatrix[orderedRows, ]
+rowAnnotOrdered <- clusterLabels[orderedRows, , drop = FALSE]
+
+# Add cluster labels back to PSI table and merge with expression
+cleanPsiWithClusters <- cleanPsi[rownames(cleanPsi) %in% rownames(clusterLabels)]
+cleanPsiWithClusters$CLUSTER <- clusterLabels[rownames(cleanPsiWithClusters), "cluster"]
+mergedClusteredData <- merge(cleanPsiWithClusters, expressionClean, by = "GENE", all.x = TRUE)
+
+# Determine low-expression events (bottom 25% mean cRPKM across samples)
+exprCols <- grep("-cRPKM$", colnames(mergedClusteredData), value = TRUE)
+exprMeans <- rowMeans(mergedClusteredData[, exprCols, with = FALSE], na.rm = TRUE)
+exprQuantiles <- quantile(exprMeans, probs = 0.25, na.rm = TRUE)
+lowExprEvents <- mergedClusteredData$EVENT[exprMeans <= exprQuantiles]
+
+# Highlight low-expression events in matrix with sentinel value (-10)
+lowExprSentinel <- -10
+matrixOrderedCustom <- matrixOrdered
+matrixOrderedCustom[rownames(matrixOrderedCustom) %in% lowExprEvents, ] <- lowExprSentinel
+colnames(matrixOrderedCustom) <- colnames(matrixOrdered)  # preserve original names
+
+# Reload sample group data to ensure clean character types
+sampleGroups <- fread("data/vastdb_Sample_Groups.csv", stringsAsFactors = FALSE)
+sampleGroups <- as.data.frame(sampleGroups)
+sampleGroups$Sample <- paste0(sampleGroups$Sample, "_PSI")
+rownames(sampleGroups) <- sampleGroups$Sample
+
+# Match sample group labels by column names of matrixOrderedCustom
+matchedGroups <- sampleGroups$sample_group[match(colnames(matrixOrderedCustom), sampleGroups$Sample)]
+tissueAnnotation <- data.frame(Group = matchedGroups)
+rownames(tissueAnnotation) <- colnames(matrixOrderedCustom)
+
+# Convert to factor
+tissueAnnotation$Group <- factor(tissueAnnotation$Group)
+
+# Check that it's now working
+table(tissueAnnotation$Group, useNA = "always")
+stopifnot(all(!is.na(tissueAnnotation$Group)))
+
+# Define tissue colour palette
+groupLevels <- levels(tissueAnnotation$Group)
+library(Polychrome)
+tissuePalette <- Polychrome::createPalette(length(groupLevels), seedcolors = c("#000000", "#FFFFFF"))
+names(tissuePalette) <- groupLevels
+
+# Define colour scale: yellow for low-expression, blue-to-red for PSI, grey for NA
+n_colors <- 100
+colorScale <- c("lightyellow", colorRampPalette(c("lightblue", "dodgerblue", "pink", "firebrick"))(n_colors))
+breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
+
+# Plot heatmap
+png("IRClusters4kmeansHeatmapExprQuartiles.png", width = 1600, height = 1200, res = 150)
+pheatmap(matrixOrderedCustom,
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         annotation_row = rowAnnotOrdered,
+         annotation_col = tissueAnnotation,
+         annotation_colors = list(Group = tissuePalette),
+         color = colorScale,
+         breaks = breaks,
+         na_col = "grey90",
+         main = "Intron Retention Clusters with Sample Groups (Low Expression in Yellow)")
+dev.off()
+
+```

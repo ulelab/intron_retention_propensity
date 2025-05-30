@@ -1,0 +1,14 @@
+name: rbpnet-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy=1.26
+  - scipy
+  - pandas
+  - pyarrow
+  - pip
+  - pip:
+      - tensorflow==2.13.0
+      - tensorflow-probability==0.21.0
+      - git+https://github.com/mhorlacher/rbpnet.git
