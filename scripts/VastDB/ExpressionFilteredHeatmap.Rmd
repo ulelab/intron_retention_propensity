@@ -14,8 +14,8 @@ library(pheatmap)
 library(dplyr)
 library(stringr)
 library(tidyr)
-expressionTable <- fread("data/EXPRESSION_TABLE-hg38.tab")
-psiTable <- fread("data/PSI_TABLE-hg38.tab")
+expressionTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/EXPRESSION_TABLE-hg38.tab")
+psiTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/PSI_TABLE-hg38.tab")
 
 ```
 
@@ -38,18 +38,45 @@ setnames(expressionClean, "NAME", "GENE")
 psiColsToRename <- colnames(metaPsi)[7:151]
 setnames(metaPsi, psiColsToRename, paste0(psiColsToRename, "_PSI"))
 
-# Identify rows where every value is NA and remove those rows for both meta and values Psi tables
-all_na_rows <- apply(metaPsi[, 7:151], 1, function(x) all(is.na(x)))
-metaPsi <- metaPsi[!all_na_rows, ]
+```
 
-# Convert to matrix and preserve rownames
-meta_cols <- c("EVENT", "COORD", "LENGTH", "FullCO", "COMPLEX")  # GENE retained
-cleanPsi <- metaPsi[, !colnames(metaPsi) %in% meta_cols, with = FALSE]
-valuesPsi <- as.matrix(cleanPsi[, !("GENE"), with = FALSE])
-rownames(valuesPsi) <- metaPsi$EVENT
+```{r}
+# Determine low-expression events (bottom 25% mean cRPKM across samples)
+exprCols <- grep("-cRPKM$", colnames(expressionClean), value = TRUE)
+allExprValues <- unlist(expressionClean[, ..exprCols], use.names = FALSE)
+exprThreshold <- quantile(allExprValues, probs = 0.25, na.rm = TRUE)
 
-valuesMatrix <- as.matrix(valuesPsi)
-rownames(valuesMatrix) <- rownames(metaPsi)
+# Set values below threshold to -10
+expressionCleanLowMasked <- copy(expressionClean)
+for (col in exprCols) {
+  expressionCleanLowMasked[[col]][expressionCleanLowMasked[[col]] <= exprThreshold] <- 0
+}
+
+# Remove duplicated GENE rows, keeping the first occurrence
+expressionCleanUnique <- expressionCleanLowMasked[!duplicated(expressionCleanLowMasked$GENE), ]
+
+# Merge with metadata
+mergedExpressionData <- merge(metaPsi, expressionCleanUnique, by = "GENE", all.x = TRUE)
+```
+
+```{r}
+# Extract matched column names
+psi_cols <- names(mergedClusteredData)[8:152]
+expr_cols <- names(mergedClusteredData)[153:297]
+
+# Clean sample names for matching
+psi_base <- sub("_PSI$", "", psi_cols)
+expr_base <- sub("-cRPKM$", "", expr_cols)
+
+# Find matched column pairs
+matched_samples <- intersect(psi_base, expr_base)
+
+# For each matched sample, set PSI to NA where expression is -10
+for (sample in matched_samples) {
+  psi_col <- paste0(sample, "_PSI")
+  expr_col <- paste0(sample, "-cRPKM")
+  mergedClusteredData[[psi_col]][mergedClusteredData[[expr_col]] == -10] <- NA
+}
 
 # Filter rows with >80% NAs
 rowNAfraction <- rowMeans(is.na(valuesMatrix))
@@ -73,59 +100,61 @@ set.seed(43)
 kmeansRes <- kmeans(imputeMatrix, centers = 4)
 clusterLabels <- data.frame(cluster = factor(paste0("Cluster_", kmeansRes$cluster),
                                              levels = paste0("Cluster_", 1:4)))
+rownames(filteredMatrix) <- metaPsi$EVENT[rowNAfraction < 0.8]
+rownames(imputeMatrix) <- rownames(filteredMatrix)
 rownames(clusterLabels) <- rownames(imputeMatrix)
 
 # Order matrix rows by cluster
 orderedRows <- rownames(clusterLabels)[order(clusterLabels$cluster)]
 matrixOrdered <- filteredMatrix[orderedRows, ]
 rowAnnotOrdered <- clusterLabels[orderedRows, , drop = FALSE]
-
-# Add cluster labels back to cleanPsi from imputed dataset
-cleanPsiWithClusters <- cleanPsi[rownames(cleanPsi) %in% rownames(clusterLabels)]
-cleanPsiWithClusters$CLUSTER <- clusterLabels[rownames(cleanPsiWithClusters), "cluster"]
-cleanPsiWithClusters <- cleanPsiWithClusters[!is.na(cleanPsiWithClusters$CLUSTER), ]
 ```
 
 ```{r}
-# K-means clustering on imputed matrix
-imputeMatrix <- filteredMatrix
-for (i in 1:nrow(imputeMatrix)) {
-  row_na <- is.na(imputeMatrix[i, ])
-  if (any(row_na)) {
-    imputeMatrix[i, row_na] <- median(imputeMatrix[i, ], na.rm = TRUE)
-  }
-}
-
-set.seed(43)
-kmeansRes <- kmeans(imputeMatrix, centers = 4)
-clusterLabels <- data.frame(cluster = factor(paste0("Cluster_", kmeansRes$cluster),
-                                             levels = paste0("Cluster_", 1:4)))
-rownames(clusterLabels) <- rownames(imputeMatrix)
-
-# Order matrix rows by cluster
-orderedRows <- rownames(clusterLabels)[order(clusterLabels$cluster)]
-matrixOrdered <- filteredMatrix[orderedRows, ]
-rowAnnotOrdered <- clusterLabels[orderedRows, , drop = FALSE]
-
 # Add cluster labels back to PSI table and merge with expression
-cleanPsiWithClusters <- cleanPsi[rownames(cleanPsi) %in% rownames(clusterLabels)]
-cleanPsiWithClusters$CLUSTER <- clusterLabels[rownames(cleanPsiWithClusters), "cluster"]
-mergedClusteredData <- merge(cleanPsiWithClusters, expressionClean, by = "GENE", all.x = TRUE)
+metaPsiWithClusters <- metaPsi[metaPsi$EVENT %in% rownames(clusterLabels), , drop = FALSE]
+metaPsiWithClusters$CLUSTER <- clusterLabels[metaPsiWithClusters$EVENT, "cluster"]
+metaPsiWithClusters <- metaPsiWithClusters[, c("CLUSTER", setdiff(names(metaPsiWithClusters), "CLUSTER")), with = FALSE]
+sum(duplicated(metaPsiWithClusters$EVENT))
 
-# Determine low-expression events (bottom 25% mean cRPKM across samples)
-exprCols <- grep("-cRPKM$", colnames(mergedClusteredData), value = TRUE)
-exprMeans <- rowMeans(mergedClusteredData[, exprCols, with = FALSE], na.rm = TRUE)
-exprQuantiles <- quantile(exprMeans, probs = 0.25, na.rm = TRUE)
-lowExprEvents <- mergedClusteredData$EVENT[exprMeans <= exprQuantiles]
+mergedClusteredData <- merge(metaPsiWithClusters, expressionClean, by = "GENE", all.x = TRUE)
+fwrite(mergedClusteredData, file = "mergedClusteredData.tsv", sep = "\t", quote = FALSE, na = "NA")
+
+# Drop Meta data for heatmap plotting
+mergedCleanedData <- mergedClusteredData
+rownames(mergedCleanedData) <- mergedCleanedData$EVENT
+mergedCleanedData <- mergedCleanedData[, -c(2:7), with = FALSE]
 
 # Highlight low-expression events in matrix with sentinel value (-10)
 lowExprSentinel <- -10
 matrixOrderedCustom <- matrixOrdered
 matrixOrderedCustom[rownames(matrixOrderedCustom) %in% lowExprEvents, ] <- lowExprSentinel
 colnames(matrixOrderedCustom) <- colnames(matrixOrdered)  # preserve original names
+```
 
+```{r}
+# Identify duplicated GENE entries (both first and subsequent)
+dup_genes <- expressionClean$GENE[duplicated(expressionClean$GENE) | duplicated(expressionClean$GENE, fromLast = TRUE)]
+
+# Subset full data for those duplicated genes
+expressionDuplicates <- expressionClean[expressionClean$GENE %in% dup_genes, ]
+
+# Save to TSV
+fwrite(expressionDuplicates, file = "expressionClean_duplicates.tsv", sep = "\t", quote = FALSE, na = "NA")
+
+# Identify duplicated EVENT entries
+dup_event_rows <- mergedClusteredData[duplicated(mergedClusteredData$EVENT) | duplicated(mergedClusteredData$EVENT, fromLast = TRUE), ]
+
+# Print unique GENE names from those rows
+unique_dup_genes <- unique(dup_event_rows$GENE)
+print(unique_dup_genes)
+
+
+```
+
+```{r}
 # Reload sample group data to ensure clean character types
-sampleGroups <- fread("data/vastdb_Sample_Groups.csv", stringsAsFactors = FALSE)
+sampleGroups <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/vastdb_Sample_Groups.csv", stringsAsFactors = FALSE)
 sampleGroups <- as.data.frame(sampleGroups)
 sampleGroups$Sample <- paste0(sampleGroups$Sample, "_PSI")
 rownames(sampleGroups) <- sampleGroups$Sample
@@ -138,23 +167,21 @@ rownames(tissueAnnotation) <- colnames(matrixOrderedCustom)
 # Convert to factor
 tissueAnnotation$Group <- factor(tissueAnnotation$Group)
 
-# Check that it's now working
-table(tissueAnnotation$Group, useNA = "always")
-stopifnot(all(!is.na(tissueAnnotation$Group)))
-
 # Define tissue colour palette
 groupLevels <- levels(tissueAnnotation$Group)
 library(Polychrome)
 tissuePalette <- Polychrome::createPalette(length(groupLevels), seedcolors = c("#000000", "#FFFFFF"))
 names(tissuePalette) <- groupLevels
+```
 
+```{r}
 # Define colour scale: yellow for low-expression, blue-to-red for PSI, grey for NA
 n_colors <- 100
 colorScale <- c("lightyellow", colorRampPalette(c("lightblue", "dodgerblue", "pink", "firebrick"))(n_colors))
 breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
 
 # Plot heatmap
-png("IRClusters4kmeansHeatmapExprQuartiles.png", width = 1600, height = 1200, res = 150)
+png("NEWIRClusters4kmeansHeatmapExprQuartiles.png", width = 1600, height = 1200, res = 150)
 pheatmap(matrixOrderedCustom,
          cluster_rows = FALSE,
          cluster_cols = TRUE,

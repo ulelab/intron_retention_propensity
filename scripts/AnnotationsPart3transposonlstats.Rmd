@@ -1,0 +1,243 @@
+---
+title: "AnnotationsPart3"
+author: "Michael K. Jones"
+date: "2025-07-05"
+output: html_document
+---
+
+```{r}
+library(data.table)
+
+merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedwithtransposon_final06072025.tsv")
+
+predict <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/Intersect_f250_CrypticPRPF8.bed")
+```
+```{r}
+predict <- predict[predict[[7]] != 0, ]
+library(GenomicRanges)
+library(dplyr)
+
+# Step 1: Extract strand from FullCO and insert as column 16
+merged <- merged %>%
+  mutate(strand = substr(FullCO, nchar(FullCO), nchar(FullCO))) %>%
+  relocate(strand, .after = 15)
+```
+```{r}
+# Step 2: Convert to GRanges
+gr_merged <- GRanges(seqnames = merged$chrom,
+                     ranges = IRanges(start = merged$start, end = merged$end),
+                     strand = merged$strand)
+
+gr_predict <- GRanges(seqnames = predict$V1,
+                      ranges = IRanges(start = predict$V2, end = predict$V3),
+                      strand = predict$V4)
+```
+```{r}
+# Step 3: Find overlaps
+hits <- findOverlaps(gr_merged, gr_predict, ignore.strand = FALSE)
+```
+```{r}
+# Step 4: Summarise overlaps
+summary_df <- as.data.frame(hits) %>%
+  mutate(value = predict$V7[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(overlap_sum = sum(value, na.rm = TRUE), .groups = "drop")
+```
+```{r}
+# Step 5: Add overlap summary back into merged, preserving all rows
+merged$predict_overlap_sum <- 0  # default to 0
+merged$predict_overlap_sum[summary_df$queryHits] <- summary_df$overlap_sum
+merged <- merged %>%
+  relocate(predict_overlap_sum, .after = 1)
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(merged, aes(x = factor(CLUSTER), y = predict_overlap_sum, fill = factor(CLUSTER))) +
+  geom_boxplot(width = 0.5, outlier.shape = NA, colour = "black") +
+  scale_fill_brewer(palette = "Set2", name = "Cluster") +
+  labs(
+    title = "Predicted event frequency across PSI clusters",
+    x = "Intron retention category",
+    y = "Sum of predicted cryptic sites"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+# Ensure CLUSTER is an ordered factor (in meaningful biological order)
+merged$CLUSTER <- factor(merged$CLUSTER, levels = c(1, 2, 4, 3), ordered = TRUE)
+
+# Fit ordinal regression (proportional odds logistic regression)
+model <- polr(CLUSTER ~ predict_overlap_sum, data = merged, method = "logistic", Hess = TRUE)
+summary(model)
+```
+```{r}
+merged$log_LENGTH <- log10(merged$LENGTH)
+
+lmodel <- polr(CLUSTER ~ log_LENGTH, data = merged, method = "logistic", Hess = TRUE)
+summary(lmodel)
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(merged, aes(x = factor(CLUSTER), y = LENGTH, fill = factor(CLUSTER))) +
+    geom_violin(trim = FALSE, scale = "width", colour = "black", alpha = 0.7) +
+    geom_boxplot(width = 0.1, outlier.shape = NA, fill = "white", colour = "black") +
+    scale_y_log10() +
+    scale_fill_brewer(palette = "Set2", name = "Cluster") +
+    labs(
+        title = "Intron length does not influence PSI cluster identity",
+        x = "Intron retention category",
+        y = "Base pair length (log scale)"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none")
+```
+
+```{r}
+library(data.table)
+library(dplyr)
+library(tidyr)
+
+
+# Step 1: Select all *_PSI columns and compute row means
+psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
+
+merged$mean_PSI <- rowMeans(merged[, ..psi_cols], na.rm = TRUE)
+
+# Step 2: Binary transposon presence (cols 26–34)
+trans_binary <- merged[, 26:34] %>%
+  mutate(across(everything(), ~ ifelse(is.na(.) | . == "", 0, 1)))
+
+# Rename illegal column name
+colnames(trans_binary)[colnames(trans_binary) == "Retroposon/SVA"] <- "Retroposon_SVA"
+
+# Step 3: Combine into model input
+merged_for_lm <- bind_cols(mean_PSI = merged$mean_PSI, trans_binary) %>%
+  drop_na(mean_PSI)
+
+# Step 4: Linear regression
+model_lm <- lm(mean_PSI ~ sine + line + dna + ltr + Retroposon_SVA +
+                          satellite + Low_complexity + Simple_repeat + rna,
+               data = merged_for_lm)
+
+summary(model_lm)
+
+```
+
+```{r}
+library(dplyr)
+
+# Define transposon columns by name (original positions 26:34)
+transposon_cols <- colnames(merged)[26:34]
+
+# Clean and summarise
+summary_table <- merged %>%
+  mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1))) %>%
+  group_by(CLUSTER) %>%
+  summarise(across(all_of(transposon_cols), sum))
+
+
+```
+
+```{r}
+# Step 1: Count total entries per CLUSTER
+cluster_sizes <- merged %>%
+  group_by(CLUSTER) %>%
+  summarise(cluster_total = n())
+
+# Step 2: Get transposon sums per CLUSTER
+transposon_cols <- colnames(merged)[26:34]
+
+transposon_sums <- merged %>%
+  mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1))) %>%
+  group_by(CLUSTER) %>%
+  summarise(across(all_of(transposon_cols), sum, .names = "sum_{.col}"))
+
+# Step 3: Join totals and compute proportions (overrepresentation)
+transposon_enrichment <- left_join(transposon_sums, cluster_sizes, by = "CLUSTER") %>%
+  mutate(across(starts_with("sum_"), ~ . / cluster_total, .names = "rel_{.col}"))
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Step 1: Transposon column names (from merged)
+transposon_cols <- colnames(merged)[26:34]
+
+# Step 2: Binarise transposon presence
+merged_bin <- merged %>%
+  mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1)))
+
+# Step 3: Total number of rows
+total_n <- nrow(merged_bin)
+
+# Step 4: Global frequency of each transposon
+global_freq <- colMeans(merged_bin[, ..transposon_cols])
+
+# Step 5: Get observed counts per CLUSTER
+observed <- merged_bin %>%
+  group_by(CLUSTER) %>%
+  summarise(across(all_of(transposon_cols), sum), .groups = "drop")
+
+# Step 6: Get cluster sizes
+cluster_sizes <- merged_bin %>%
+  count(CLUSTER, name = "cluster_total")
+
+# Step 7: Manually calculate expected counts
+# Create a data frame where each expected count = cluster size × global freq
+expected <- cluster_sizes %>%
+  rowwise() %>%
+  mutate(expected = list(cluster_total * global_freq)) %>%
+  unnest_wider(expected, names_sep = "_") %>%
+  rename_with(~ paste0("exp_", transposon_cols), starts_with("expected_"))
+
+# Step 8: Pivot both tables to long format
+observed_long <- pivot_longer(observed, -CLUSTER, names_to = "transposon", values_to = "observed")
+expected_long <- pivot_longer(expected, -CLUSTER, names_to = "transposon", values_to = "expected") %>%
+  mutate(transposon = sub("^exp_", "", transposon))
+
+# Step 9: Join and compute over/underrepresentation
+enrichment <- left_join(observed_long, expected_long, by = c("CLUSTER", "transposon")) %>%
+  mutate(deviation = observed - expected,
+         enrichment_score = deviation / expected)
+
+enrichment$enrichment_score <- format(enrichment$enrichment_score, scientific = FALSE)
+
+```
+
+```{r}
+merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedwithtransposon_final06072025.tsv")
+
+# Use the same PSI column detection
+psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
+
+# Compute median PSI per intron
+merged$median_PSI <- apply(merged[, ..psi_cols], 1, median, na.rm = TRUE)
+
+# Binary transposon matrix
+trans_binary <- merged[, 26:34] %>%
+  mutate(across(everything(), ~ ifelse(is.na(.) | . == "", 0, 1)))
+
+colnames(trans_binary)[colnames(trans_binary) == "Retroposon/SVA"] <- "Retroposon_SVA"
+
+# Combine for modelling
+merged_for_lm <- bind_cols(median_PSI = merged$median_PSI, trans_binary) %>%
+  drop_na(median_PSI)
+
+# Fit linear model
+model_lm <- lm(median_PSI ~ sine + line + dna + ltr + Retroposon_SVA +
+                           satellite + Low_complexity + Simple_repeat + rna,
+               data = merged_for_lm)
+
+summary(model_lm)
+
+```

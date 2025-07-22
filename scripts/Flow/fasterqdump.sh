@@ -6,7 +6,7 @@
 #SBATCH --output=output.array.%A.%a
 #SBATCH --array=1-90
 
-input_file=$(head accession.txt -n $SLURM_ARRAY_TASK_ID | tail -n 1)
+input_file=`head accession.txt -n $SLURM_ARRAY_TASK_ID | tail -n 1`
 
 fasterq-dump $input_file
 

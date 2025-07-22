@@ -1,0 +1,148 @@
+---
+title: "Annotations Exploration"
+author: "Michael K. Jones"
+date: "2025-06-09"
+output: html_document
+---
+
+```{r}
+library(data.table)
+minorintronAnno <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/Homo_sapiens_intron.csv")
+mergedPSI <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedwithtransposon_final06072025.tsv")
+```
+```{r}
+library(GenomicRanges)
+library(dplyr)
+library(readr)
+library(stringr)
+
+mergedPSI <- mergedPSI[, -c(17:25)]
+mergedPSI$strand <- substr(mergedPSI$FullCO, nchar(mergedPSI$FullCO), nchar(mergedPSI$FullCO))
+
+minorintronAnno$chr <- str_extract(minorintronAnno$intron_name, "(?<=Homo_sapiens_)[^_]+")
+minorintronAnno$chr <- paste0("chr", minorintronAnno$chr)
+
+minorintronAnno <- minorintronAnno %>% mutate(splice_length = intron_end - intron_start)
+
+# Build GRanges for mergedPSI
+gr_psi <- GRanges(
+  seqnames = mergedPSI$chrom,
+  ranges = IRanges(start = mergedPSI$start, end = mergedPSI$end),
+  strand = mergedPSI$strand
+)
+
+# Build GRanges for minorintronAnno
+gr_minor <- GRanges(
+  seqnames = minorintronAnno$chr,
+  ranges = IRanges(start = minorintronAnno$intron_start, end = minorintronAnno$intron_end)
+)
+
+```
+
+```{r}
+# Find overlaps
+hits <- findOverlaps(gr_minor, gr_psi)
+
+# Build a data.frame of matches
+matched <- data.frame(
+  minor_index = queryHits(hits),
+  psi_index = subjectHits(hits)
+) %>%
+  mutate(
+    intron_id = minorintronAnno$intron_id[minor_index],
+    psi_chr = mergedPSI$chr[psi_index],
+    psi_start = mergedPSI$start[psi_index],
+    psi_end = mergedPSI$end[psi_index]
+  )
+
+```
+
+```{r}
+# Bring over metadata columns
+matched <- matched %>%
+  mutate(
+    five_ss_class = minorintronAnno$`5ss_class`[minor_index],
+    three_ss_class = minorintronAnno$`3ss_class`[minor_index],
+    intron_class = minorintronAnno$intron_class[minor_index],
+    intron_phase = minorintronAnno$intron_phase[minor_index],
+    intron_name = minorintronAnno$intron_name[minor_index],
+    intron_start = minorintronAnno$intron_start[minor_index],
+    intron_end = minorintronAnno$intron_end[minor_index],
+    splice_length = minorintronAnno$splice_length[minor_index]
+  )
+```
+
+```{r}
+# First: make sure columns you're joining on are the same type
+matched <- matched %>%
+  rename(chrom = psi_chr, start = psi_start, end = psi_end)
+```
+
+```{r}
+# Perform left join to bring metadata into mergedPSI
+mergedPSI_with_minor <- mergedPSI %>%
+  left_join(
+    matched %>% select(chrom, start, end, five_ss_class, three_ss_class, intron_class, intron_phase, intron_name, intron_start, intron_end, splice_length),
+    by = c("chrom", "start", "end")
+  )
+```
+
+```{r}
+dim(mergedPSI_with_minor)
+```
+```{r}
+# Calculate absolute difference between splice lengths
+mergedPSI_with_minor <- mergedPSI_with_minor %>%
+  mutate(length_diff = abs(LENGTH - splice_length))
+
+# For each EVENT, keep only the row with minimal difference
+mergedPSI_best_match <- mergedPSI_with_minor %>%
+  group_by(EVENT) %>%
+  slice_min(order_by = length_diff, n = 1, with_ties = FALSE) %>%
+  ungroup()
+```
+
+
+```{r}
+write.table(mergedPSI_best_match, file = "mergedPSI_final09072025.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+```{r}
+# Subset columns
+subset_df <- mergedPSI_best_match %>%
+  select(EVENT, CLUSTER, intron_class)
+
+# Write to TSV
+write.table(subset_df, file = "mergedPSI_best_match_subset.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+```{r}
+dup_events <- mergedPSI_with_minor$EVENT[duplicated(mergedPSI_with_minor$EVENT)]
+dup_rows <- mergedPSI_with_minor[mergedPSI_with_minor$EVENT %in% dup_events, ]
+
+conflicting_events <- dup_rows %>%
+  group_by(EVENT) %>%
+  summarise(n_class = n_distinct(intron_class, na.rm = TRUE)) %>%
+  filter(n_class > 1)
+
+# Now extract the full rows corresponding to these conflicting events:
+conflict_rows <- dup_rows %>%
+  filter(EVENT %in% conflicting_events$EVENT)
+
+# Add length for spliceosome type data
+conflict_rows <- conflict_rows %>% mutate(splice_length = intron_end - intron_start)
+
+```
+
+```{r}
+conflict_rows_shortest <- conflict_rows %>%
+  group_by(EVENT) %>%
+  slice_min(order_by = splice_length, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+conflict_rows_shortest %>%
+  select(start, end, intron_start, intron_end) %>%
+  head(10)
+
+```

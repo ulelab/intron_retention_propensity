@@ -1,0 +1,272 @@
+---
+title: "ExpressionFilteredHeatmap"
+author: "Michael K. Jones"
+date: "2025-05-16"
+output: html_document
+---
+# VastDB Expression filtered Intron Retention Events
+
+## Remove IR events below 25th percentile from data and cluster
+
+```{r}
+library(data.table)
+library(pheatmap)
+library(dplyr)
+library(stringr)
+library(tidyr)
+expressionTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/EXPRESSION_TABLE-hg38.tab.gz")
+psiTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/PSI_TABLE-hg38.tab.gz")
+
+```
+
+```{r}
+# Create table containing only IR events, merge with summary statistics for exploration
+psiHsaIN <- psiTable[grep("^HsaIN", psiTable$EVENT), ]
+rownames(psiHsaIN) <- psiHsaIN$EVENT
+rn <- rownames(psiHsaIN)
+
+# Remove Meta data and Quality measures (-Q$)
+metaPsi <- psiHsaIN[, !grepl("-Q$", colnames(psiHsaIN)), with = FALSE]
+rownames(metaPsi) <- metaPsi$EVENT
+
+# Create cleaned version of expressionTable
+setnames(expressionTable, "NAME", "GENE")
+expressionClean <- expressionTable[, !("ID"), with = FALSE]
+expressionFiltered <- expressionClean[, !grepl("-cRPKM$", colnames(expressionClean)), with = FALSE]
+expressionClean <- expressionClean[, !grepl("-Counts$", colnames(expressionClean)), with = FALSE]
+
+# Add _PSI to PSI columns
+psiColsToRename <- colnames(metaPsi)[7:151]
+setnames(metaPsi, psiColsToRename, paste0(psiColsToRename, "_PSI"))
+
+# Remove rows where >80% of PSI values are NA
+na_threshold_rows <- apply(metaPsi[, 7:151], 1, function(x) mean(is.na(x)) > 0.8)
+metaPsi <- metaPsi[!na_threshold_rows, ]
+
+# Clean up input files
+rm(psiTable, psiHsaIN)
+```
+
+```{r}
+# Step 1: Identify the count columns
+countCols <- grep("-Counts$", names(expressionTable), value = TRUE)
+
+# Step 2: Extract just the count data
+countData <- expressionTable[, ..countCols]
+
+# Step 3: Compute total counts per sample (column-wise sum)
+totalCounts <- colSums(countData, na.rm = TRUE)
+
+# Step 4: Add as new column in tissueAnnotation
+tissueAnnotation2 <- tissueAnnotation
+tissueAnnotation2$TotalCounts <- totalCounts
+
+# Optional: Save the result
+saveRDS(tissueAnnotation2, file = "tissueAnnotation2.rds")
+```
+
+```{r}
+# Determine low-expression events (bottom 25% mean cRPKM across samples)
+exprCols <- grep("-cRPKM$", colnames(expressionClean), value = TRUE)
+allExprValues <- unlist(expressionClean[, ..exprCols], use.names = FALSE)
+exprThreshold <- quantile(allExprValues, probs = 0.25, na.rm = TRUE)
+
+# Set values below threshold to 0
+expressionCleanLowMasked <- copy(expressionClean)
+for (col in exprCols) {
+  expressionCleanLowMasked[[col]][expressionCleanLowMasked[[col]] <= exprThreshold] <- 0
+}
+# Remove duplicated GENE rows, keeping the first occurrence
+expressionCleanUnique <- expressionCleanLowMasked[!duplicated(expressionCleanLowMasked$GENE), ]
+```
+
+```{r}
+# Remove first 6 columns (e.g. CLUSTER, GENE, EVENT, COORD, INFO, LENGTH) 
+cleanPsi <- metaPsi[, -c(1:6), with = FALSE]
+
+# Convert to matrix for imputation and clustering
+valuesMatrix <- as.matrix(cleanPsi)
+
+# Preserve rownames (from EVENT)
+rownames(valuesMatrix) <- metaPsi$EVENT
+```
+
+```{r}
+# Impute NAs as event median, copy matrix to preserve original NA values
+imputeMatrix <- valuesMatrix  
+rownames(imputeMatrix) <- rownames(valuesMatrix)
+for (i in 1:nrow(imputeMatrix)) {
+  row_na <- is.na(imputeMatrix[i, ])
+  if (any(row_na)) {
+    imputeMatrix[i, row_na] <- median(imputeMatrix[i, ], na.rm = TRUE)
+  }
+}
+
+# K-means clustering (k = 4) on imputed matrix
+set.seed(43)
+kmeansRes <- kmeans(imputeMatrix, centers = 4)
+clusterLabels <- data.frame(cluster = factor(paste0("Cluster_", kmeansRes$cluster),
+                                             levels = paste0("Cluster_", 1:4)))
+rownames(clusterLabels) <- rownames(imputeMatrix)
+
+orderedRows <- rownames(clusterLabels)[order(clusterLabels$cluster)]
+matrixOrdered <- valuesMatrix[orderedRows, ]
+
+```
+
+```{r}
+# Add cluster labels back to PSI table 
+metaPsiWithClusters <- metaPsi[metaPsi$EVENT %in% rownames(clusterLabels), , drop = FALSE]
+metaPsiWithClusters$CLUSTER <- clusterLabels[metaPsiWithClusters$EVENT, "cluster"]
+metaPsiWithClusters <- metaPsiWithClusters[, c("CLUSTER", setdiff(names(metaPsiWithClusters), "CLUSTER")), with = FALSE]
+
+# Merge clustered PSI data with Expression data
+mergedClusterData <- merge(metaPsiWithClusters, expressionCleanUnique, by = "GENE", all.x = TRUE)
+mergedClusterData <- merge(mergedClusterData, countsTable, by = "GENE", all.x = TRUE)
+
+# Order by EVENT rownames from matrixOrdered
+mergedClusterData <- mergedClusterData[match(rownames(matrixOrdered), mergedClusterData$EVENT), ]
+
+#fwrite(mergedClusterData, file = "mergedClusterData.tsv", sep = "\t", quote = FALSE, na = "NA")
+```
+
+```{r}
+# Extract matched column names
+psi_cols <- names(mergedClusterData)[8:152]
+expr_cols <- names(mergedClusterData)[153:297]
+
+# Clean sample names for matching
+psi_base <- sub("_PSI$", "", psi_cols)
+expr_base <- sub("-cRPKM$", "", expr_cols)
+
+# Find matched column pairs
+matched_samples <- intersect(psi_base, expr_base)
+
+# For each matched sample, set PSI to -10 where expression is 0
+for (sample in matched_samples) {
+  psi_col <- paste0(sample, "_PSI")
+  expr_col <- paste0(sample, "-cRPKM")
+  mergedClusterData[[psi_col]][mergedClusterData[[expr_col]] == 0] <- -10
+}
+```
+
+```{r}
+# Drop Meta data for heatmap plotting
+mergedCleanedData <- mergedClusterData
+mergedCleanedData <- mergedClusterData[, -c(1, 2, 4:7), with = FALSE]
+mergedCleanedData <- mergedCleanedData[, !grepl("-cRPKM$", names(mergedCleanedData)), with = FALSE]
+mergedCleanedData <- mergedCleanedData[, -c(1, 147), with = FALSE]
+rownames(mergedCleanedData) <- mergedClusterData$EVENT
+
+# Add CLUSTER column by matching rownames
+mergedCleanedData$CLUSTER <- clusterLabels[rownames(mergedCleanedData), "cluster"]
+
+# Create cluster rows annotation
+rowAnnotOrdered <- data.frame(CLUSTER = mergedCleanedData$CLUSTER)
+rownames(rowAnnotOrdered) <- rownames(mergedCleanedData)
+```
+
+```{r}
+# Reload sample group data to ensure clean character types
+sampleGroups <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/vastdb_Sample_Groups.csv", stringsAsFactors = FALSE)
+sampleGroups <- as.data.frame(sampleGroups)
+sampleGroups$Sample <- paste0(sampleGroups$Sample, "_PSI")
+rownames(sampleGroups) <- sampleGroups$Sample
+
+# Match sample group labels by column names of matrixOrdered
+matchedGroups <- sampleGroups$sample_group[match(colnames(matrixOrdered), sampleGroups$Sample)]
+tissueAnnotation <- data.frame(Group = matchedGroups)
+tissueAnnotation$Group <- factor(tissueAnnotation$Group)
+rownames(tissueAnnotation) <- colnames(matrixOrdered)
+
+# Define tissue colour palette
+groupLevels <- levels(tissueAnnotation$Group)
+library(Polychrome)
+tissuePalette <- Polychrome::createPalette(length(groupLevels), seedcolors = c("#000000", "#FFFFFF"))
+names(tissuePalette) <- groupLevels
+```
+
+```{r}
+# Create a new annotation for rows with Braunschweig intron types
+mergedPSI_best_match_subset <- read_tsv("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedPSI_best_match_subset.tsv")
+
+# Extract last field after last colon (1-2 characters at end)
+mergedPSI_best_match_subset <- mergedPSI_best_match_subset %>%
+  mutate(annotation = str_extract(braun_name, "[^:]+$"))
+
+rowBraunAnnotOrdered <- data.frame(
+  EVENT = mergedPSI_best_match_subset$EVENT,
+  annotation = mergedPSI_best_match_subset$annotation
+)
+
+# Reorder to match mergedCleanedData rownames (assuming rownames are EVENT IDs)
+rowBraunAnnotOrdered <- rowBraunAnnotOrdered %>%
+  filter(EVENT %in% rownames(mergedCleanedData)) %>%
+  arrange(factor(EVENT, levels = rownames(mergedCleanedData))) %>%
+  select(annotation)
+
+# Set rownames to match mergedCleanedData
+rownames(rowBraunAnnotOrdered) <- rownames(mergedCleanedData)
+annotation_row <- cbind(rowAnnotOrdered, rowBraunAnnotOrdered)
+```
+
+```{r}
+# Extract totalCounts and match rownames
+totalCountsAnnot <- data.frame(totalCounts = mergedClusterData$totalCounts)
+rownames(totalCountsAnnot) <- rownames(mergedCleanedData)
+
+# Combine all row annotations together
+annotation_row <- cbind(annotation_row, totalCountsAnnot)
+colnames(annotation_row) <- c("Cluster", "IntronType", "TotalCounts")
+```
+
+```{r}
+library(RColorBrewer)
+# Assign annotation color palettes for intron type
+intronTypes <- unique(annotation_row$IntronType)
+intronPalette <- setNames(brewer.pal(length(intronTypes), "Set3"), intronTypes)
+
+# For cluster
+clusterPalette <- setNames(brewer.pal(4, "Dark2"), paste0("Cluster_", 1:4))
+
+# For totalCounts, use a continuous scale
+totalCountsPalette <- colorRampPalette(c("lightgreen", "darkgreen"))(100)
+
+# Set heatmap colors and breaks
+n_colors <- 100
+lowExprSentinel <- -10
+colorScale <- c("lightyellow", colorRampPalette(c("lightblue", "dodgerblue", "pink", "firebrick"))(n_colors))
+breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
+```
+
+```{r}
+# Plot heatmap
+png("IRHeatmap19062025.png", width = 1600, height = 1200, res = 150)
+pheatmap(matrixOrdered,
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         annotation_row = annotation_row[, c("Cluster", "IntronType", "TotalCounts")],
+         annotation_col = tissueAnnotation,
+         annotation_colors = list(
+  Group = tissuePalette,
+  IntronType = intronPalette,
+  Cluster = clusterPalette,
+  TotalCounts = totalCountsPalette
+),
+         color = colorScale,
+         breaks = breaks,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         na_col = "grey90",
+         main = "Intron Retention Clusters with Sample Groups (Low Expression in Yellow)")
+dev.off()
+```
+
+```{r}
+# Save essential objects to RDS
+saveRDS(matrixOrdered, "matrixOrdered.rds")
+saveRDS(annotation_row, "annotation_row.rds")
+saveRDS(tissueAnnotation, "tissueAnnotation.rds")
+saveRDS(tissuePalette, "tissuePalette.rds")
+
+```

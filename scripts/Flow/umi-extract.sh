@@ -20,8 +20,9 @@ OUTPUT="${FILE}_2.umi_extracted.fastq.gz"
 
 # Run umi_tools extract
 umi_tools extract \
-    -I "$READ2" \
-    -S "$OUTPUT" \
-    --bc-pattern=XXXXXNNNNNNXX \
-    --extract-method=string \
-    > "${FILE}.umi_extract.log"
+  -I "$READ2" \
+  -S "$OUTPUT" \
+  --bc-pattern=XXXXXNNNNNNXX \
+  --extract-method=string \
+  > "${FILE}.umi_extract.log"
+

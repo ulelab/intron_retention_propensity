@@ -1,0 +1,118 @@
+---
+title: "HeatmapQuickPlot"
+author: "Michael K. Jones"
+date: "2025-06-19"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(pheatmap)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(Polychrome)
+library(RColorBrewer)
+```
+
+```{r}
+matrixOrdered <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/matrixOrdered.rds")
+annotation_row <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/annotation_row.rds")
+tissueAnnotation <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/tissueAnnotation2.rds")
+tissuePalette <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/tissuePalette.rds")
+
+annotation_row <- annotation_row[, -3]
+
+# Ignore NA in intron types
+annotation_row$IntronType[is.na(annotation_row$IntronType)] <- "Unannotated"
+annotation_col <- tissueAnnotation[, c("TotalCounts", "Group")]
+
+# Define palettes
+
+intronTypes <- c("A", "B", "C")
+intronPalette <- setNames(brewer.pal(length(intronTypes), "Set3"), intronTypes)
+intronPalette["Unannotated"] <- "grey90"
+annotation_row$IntronType[!annotation_row$IntronType %in% c("A", "B", "C")] <- "Unannotated"
+annotation_row$IntronType <- droplevels(factor(annotation_row$IntronType))
+
+clusterPalette <- setNames(brewer.pal(4, "Dark2"), unique(annotation_row$Cluster))
+
+totalCountsPalette <- colorRampPalette(c("lightgreen", "darkgreen"))(100)
+
+# Heatmap color scale
+n_colors <- 100
+lowExprSentinel <- -10
+colorScale <- c("lightyellow", colorRampPalette(c("lightblue", "dodgerblue", "pink", "firebrick"))(n_colors))
+breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
+
+```
+
+```{r}
+png("IRHeatmapFinal15072025.png", width = 1600, height = 1600, res = 150)
+pheatmap(matrixOrdered,
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         annotation_row = annotation_row[, c("Cluster", "IntronType")],
+         annotation_col = annotation_col[, c("TotalCounts", "Group")],
+         annotation_colors = list(
+           Group = tissuePalette,
+           IntronType = intronPalette,
+           Cluster = clusterPalette,
+           TotalCounts = totalCountsPalette
+         ),
+         color = colorScale,
+         breaks = breaks,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         na_col = "grey90",
+         main = "IR Events Cluster by PSI and Tissue Type with Lowly Expressed Genes Masked")
+dev.off()
+```
+
+```{r}
+matrixOrdered <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/matrixOrdered.rds")
+annotation_row <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/annotation_row.rds")
+tissueAnnotation <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/tissueAnnotation.rds")
+tissuePalette <- readRDS("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/results/tissuePalette.rds")
+
+# Ignore NA in intron types
+annotation_row$IntronType[is.na(annotation_row$IntronType)] <- "Unannotated"
+
+# Define palettes
+intronTypes <- unique(annotation_row$IntronType)
+intronTypes <- intronTypes[intronTypes != "Unannotated"]
+intronPalette <- setNames(brewer.pal(length(intronTypes), "Set3"), intronTypes)
+intronPalette["Unannotated"] <- NA
+clusterPalette <- setNames(brewer.pal(4, "Dark2"), unique(annotation_row$Cluster))
+totalCountsPalette <- colorRampPalette(c("lightgreen", "darkgreen"))(100)
+
+# Heatmap color scale
+n_colors <- 100
+lowExprSentinel <- -10
+colorScale <- c("lightyellow", colorRampPalette(c("lightblue", "dodgerblue", "pink", "firebrick"))(n_colors))
+breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
+
+
+```
+
+```{r}
+png("IRHeatmapTest23062025.png", width = 1600, height = 1600, res = 150)
+pheatmap(matrixOrdered,
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         annotation_row = annotation_row[, c("Cluster", "IntronType", "TotalCounts")],
+         annotation_col = tissueAnnotation,
+         annotation_colors = list(
+           Group = tissuePalette,
+           IntronType = intronPalette,
+           Cluster = clusterPalette,
+           TotalCounts = totalCountsPalette
+         ),
+         color = colorScale,
+         breaks = breaks,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         na_col = "grey90",
+         main = "Intron Retention Clusters with Sample Groups (Low Expression in Yellow)")
+dev.off()
+```

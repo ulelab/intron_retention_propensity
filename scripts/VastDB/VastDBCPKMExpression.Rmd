@@ -14,8 +14,8 @@ output: html_document
 library(ggplot2)
 library(data.table)
 
-expressionTable <- fread("data/EXPRESSION_TABLE-hg38.tab")
-psiTable <- fread("data/PSI_TABLE-hg38.tab")
+expressionTable <- fread("~/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/EXPRESSION_TABLE-hg38.tab")
+psiTable <- fread("~/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/PSI_TABLE-hg38.tab")
 ```
 
 ```{r}
@@ -99,7 +99,7 @@ matchedTissues <- intersect(psiTissueNames, exprTissueNames)
 mergedClusteredData <- merge(cleanPsiWithClusters, expressionClean, by = "GENE", all.x = TRUE)
 
 # Load and align sample group annotations
-sampleGroups <- fread("data/vastdb_Sample_Groups.csv")
+sampleGroups <- fread("~/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/vastdb_Sample_Groups.csv")
 sampleGroups <- as.data.frame(sampleGroups)
 rownames(sampleGroups) <- sampleGroups$Sample
 
@@ -193,7 +193,7 @@ ggplot(plotDataBlood, aes(x = cRPKM, y = PSI, colour = CLUSTER)) +
 ```{r}
 
 # Prepare long-format data for all matched tissues
-plotListAll <- lapply(matchedTissues, function(tissue) {
+plotListAll <- lapply(df, function(tissue) {
   psi_col <- paste0(tissue, "_PSI")
   expr_col <- paste0(tissue, "-cRPKM")
   dt <- mergedClusteredData[, .(Tissue = tissue,
@@ -265,6 +265,37 @@ ggplot(plotDataAll, aes(x = cRPKM, y = PSI)) +
   labs(title = "PSI vs cRPKM Across All Tissues by Cluster",
        x = "Expression (cRPKM, log scale)",
        y = "PSI") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 10),
+        panel.grid.minor = element_blank())
+
+```
+
+```{r}
+library(data.table)
+library(ggplot2)
+
+df <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/Ir/mergedwithtransposon_final06072025.tsv")
+
+psi_cols <- grep("_PSI$", names(df), value = TRUE)
+expr_cols <- sub("_PSI$", "-cRPKM", psi_cols)
+
+plotDataAll <- rbindlist(lapply(seq_along(psi_cols), function(i) {
+    data.table(
+        PSI = df[[psi_cols[i]]],
+        cRPKM = df[[expr_cols[i]]],
+        CLUSTER = df$CLUSTER
+    )
+}))
+
+ggplot(plotDataAll, aes(x = cRPKM, y = PSI)) +
+  geom_hex(bins = 30) +
+  scale_fill_viridis_c(option = "plasma", trans = "log10", name = "Density") +
+  facet_wrap(~ CLUSTER, scales = "free") +
+  scale_x_log10() +
+  labs(title = "PSI vs cRPKM Across All Tissues by Cluster",
+       x = "Expression (cRPKM, log scale)",
+       y = "Percent Spliced In (PSI)") +
   theme_minimal() +
   theme(strip.text = element_text(size = 10),
         panel.grid.minor = element_blank())

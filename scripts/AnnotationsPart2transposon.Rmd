@@ -1,0 +1,230 @@
+---
+title: "AnnotationPart2"
+author: "Michael K. Jones"
+date: "2025-06-16"
+output: html_document
+---
+
+---
+title: "Annotations Exploration"
+author: "Michael K. Jones"
+date: "2025-06-09"
+output: html_document
+---
+
+```{r}
+library(data.table)
+transposonAnno <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/hg38.fa.out.gz", fill=TRUE)
+mergedPSI <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedPSI_best_match.tsv")
+```
+
+```{r}
+library(GenomicRanges)
+library(dplyr)
+library(readr)
+library(stringr)
+library(data.table)
+
+# Read first two rows to create column names
+header1 <- as.character(transposonAnno[1, ])
+header2 <- as.character(transposonAnno[2, ])
+
+# Concatenate headers with underscore (or any separator you want)
+new_colnames <- paste(header2, header1, sep = "_")
+
+# Clean up trailing underscores and slashes
+new_colnames <- gsub("_$", "", new_colnames)
+new_colnames <- gsub("/", "_", new_colnames)
+
+# Apply new column names
+setnames(transposonAnno, new_colnames)
+colnames(transposonAnno)[11] <- "repeat_type"
+colnames(transposonAnno)[12] <- "end"
+
+# Drop first three rows (since 3rd row is blank)
+transposonAnno <- transposonAnno[-c(1:3), ]
+```
+
+```{r}
+# Look for human specific introns
+targets <- c("LINE", "SINE", "DNA", "Retroposon", "LTR", "Satellite", "Simple_repeat", "Low_complexity", "rRNA", "tRNA", "srpRNA", "scRNA", "RNA")
+# Subset and count occurrences
+repeat_counts <- sapply(targets, function(target) {
+  sum(grepl(target, transposonAnno$repeat_type, fixed = TRUE))
+})
+repeat_counts
+```
+```{r}
+selectintrons <- apply(sapply(targets, function(target) {
+  grepl(target, transposonAnno$repeat_type, fixed = TRUE)
+}), 1, any)
+
+# Subset
+htransAnno <- transposonAnno[selectintrons]
+```
+
+```{r}
+# Build GRanges for mergedPSI
+gr_psi <- GRanges(
+  seqnames = mergedPSI$chrom,
+  ranges = IRanges(start = mergedPSI$start, end = mergedPSI$end),
+  strand = mergedPSI$braun_strand
+)
+
+# Build GRanges for transposonAnno
+htransAnno[, begin_position := as.numeric(begin_position)]
+htransAnno[, end_in := as.numeric(end_in)]
+
+gr_trans <- GRanges(
+  seqnames = htransAnno$sequence_query,
+  ranges = IRanges(start = htransAnno$begin_position, end = htransAnno$end_in)
+)
+```
+
+```{r}
+# Find overlaps
+hits <- findOverlaps(gr_trans, gr_psi, type = "within")
+
+# Bring over metadata columns
+matched <- tibble(
+  trans_index = queryHits(hits),
+  psi_index = subjectHits(hits),
+  intron_id = htransAnno$ID[trans_index],
+  begin_trans = htransAnno$begin_position[trans_index],
+  end_trans = htransAnno$end_in[trans_index],
+  repeat_class = htransAnno$class_family_repeat[trans_index],
+  repeat_type = htransAnno$repeat_type[trans_index],
+  psi_chr = mergedPSI$chrom[psi_index],
+  psi_start = mergedPSI$start[psi_index],
+  psi_end = mergedPSI$end[psi_index]
+)
+
+```
+
+```{r}
+# First: make sure columns you're joining on are the same type
+matched <- matched %>%
+  dplyr::rename(
+    chrom = psi_chr,
+    start = psi_start,
+    end = psi_end
+  )
+
+```
+
+```{r}
+# Perform left join to bring metadata into mergedPSI
+mergedPSI_with_trans <- mergedPSI %>%
+  left_join(
+    matched %>% select(chrom, start, end, begin_trans, end_trans, repeat_class, repeat_type, intron_id),
+    by = c("chrom", "start", "end")
+  )
+```
+
+```{r}
+rm(transposonAnno)
+rm(htransAnno)
+```
+
+```{r}
+library(tidyr)
+library(stringr)
+
+# Define grouped prefixes and individual types
+group_prefixes <- c("dna", "line", "ltr", "sine", "satellite")
+individual_types <- c("Simple_repeat", "Retroposon/SVA", "Low_complexity")
+
+# Filter just the matched transposon annotations (don't filter mergedPSI)
+transposon_filtered <- mergedPSI_with_trans %>%
+  filter(
+    str_detect(tolower(repeat_type), paste0("^(", paste(group_prefixes, collapse = "|"), ")")) |
+      repeat_type %in% individual_types |
+      str_detect(tolower(repeat_type), "rna")
+  ) %>%
+  select(EVENT, repeat_type, repeat_class) %>%
+  distinct()
+
+# Pivot wider just the filtered annotations
+trans_wide <- transposon_filtered %>%
+  pivot_wider(
+    names_from = repeat_type,
+    values_from = repeat_class,
+    values_fn = function(x) paste(unique(x), collapse = ";")
+  )
+```
+
+```{r}
+collapse_by_prefix <- function(df, prefix) {
+  matched <- names(df)[str_detect(tolower(names(df)), paste0("^", prefix))]
+  if (length(matched) == 0) return(df)
+  df %>%
+    mutate(!!prefix := apply(select(., all_of(matched)), 1, function(x) {
+      x <- na.omit(unique(unlist(str_split(x, ";"))))
+      if (length(x) == 0) return(NA_character_)
+      paste(sort(x), collapse = ";")
+    })) %>%
+    select(-all_of(matched))
+}
+
+# Collapse prefixes
+for (prefix in group_prefixes) {
+  trans_wide <- collapse_by_prefix(trans_wide, prefix)
+}
+
+# Collapse rna columns
+trans_wide <- trans_wide %>%
+  {
+    rna_cols <- names(.)[str_detect(tolower(names(.)), "rna")]
+    mutate(., rna = apply(select(., all_of(rna_cols)), 1, function(x) {
+      x <- na.omit(unique(unlist(str_split(x, ";"))))
+      if (length(x) == 0) return(NA_character_)
+      paste(sort(x), collapse = ";")
+    })) %>%
+    select(-all_of(rna_cols))
+  }
+
+```
+
+```{r}
+# Merge annotations back into full dataset
+psi_trans_wide <- mergedPSI %>%
+  left_join(trans_wide, by = "EVENT")
+
+```
+
+```{r}
+# File cleanup
+colnames(psi_trans_wide)[1] <- "PRPF8_Prediction_ID"
+
+# Capture the names of the columns to move
+cols_to_move <- colnames(psi_trans_wide)[302:329]
+
+# Capture the names of the first 11 columns
+first_block <- colnames(psi_trans_wide)[1:11]
+
+# Capture the names of the remaining columns, excluding those to move
+remaining_cols <- setdiff(colnames(psi_trans_wide), c(first_block, cols_to_move))
+
+# Reorder: first 11 cols → cols to move → remaining
+psi_trans_wide <- psi_trans_wide %>%
+  select(all_of(first_block), all_of(cols_to_move), all_of(remaining_cols))
+
+psi_trans_wide <- psi_trans_wide[, -c(16, 17, 18, 20, 21)]
+
+colnames(psi_trans_wide)[2] <- "fivePrimeSSPredictionSum"
+colnames(psi_trans_wide)[3] <- "midIntronPredictionSum"
+colnames(psi_trans_wide)[4] <- "threePrimeSSPredictionSum"
+```
+
+```{r}
+# Write to TSV
+write.table(
+  psi_trans_wide,
+  file = "mergedwithtransposon_final06072025.tsv",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE,
+  na = ""
+)
+
+```

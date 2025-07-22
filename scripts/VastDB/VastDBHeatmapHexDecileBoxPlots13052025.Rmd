@@ -23,7 +23,7 @@ library(dplyr)
 library(stringr)
 library(tidyr)
 
-psiTable <- fread("../data/VastDB/PSI_TABLE-hg38.tab")
+psiTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/PSI_TABLE-hg38.tab.gz")
 ```
 
 ```{r}
@@ -53,6 +53,7 @@ rownames(valuesPsi) <- metaPsi$EVENT
 ```{r}
 # Create a Max and Median column for quality control analysis, 24,716 Events did not have a Max value in Event Metrics
 metaPsi$Max <- apply(metaPsi[, 7:151], 1, max, na.rm = TRUE)
+metaPsi$Mean <- apply(metaPsi[, 7:151], 1, mean, na.rm = TRUE)
 metaPsi$Median <- apply(metaPsi[, 7:151], 1, median, na.rm = TRUE)
 
 # Check correlation of LENGTH and Max with Hexbin
@@ -61,7 +62,7 @@ ggplot(retention_df, aes(x = LENGTH, y = Max)) +
   stat_binhex(bins = 100) +
   scale_fill_viridis_c(trans = "log", name = "Count") +
   scale_x_log10() +
-  labs(title = "Intron Length vs Max PSI (Hexbin)",
+  labs(title = "Intron Length vs Max Percent Spliced In (PSI) (Hexbin)",
        x = "Intron Length (log10)",
        y = "Max PSI") +
   theme_minimal()
@@ -73,10 +74,10 @@ valuesPsiVector <- unlist(valuesPsi[, -1, with = FALSE], use.names = FALSE)
 valuesPsiVector <- valuesPsiVector[!is.na(valuesPsiVector)]
 
 ggplot(data.frame(PSI = valuesPsiVector), aes(x = PSI)) +
-  geom_histogram(binwidth = 5, fill = "steelblue", color = "black") +
-  labs(title = "Distribution of All PSI Values",
+  geom_histogram(binwidth = 4, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of All Percent Spliced In (PSI) Values",
        x = "PSI (%)",
-       y = "Frequency") +
+       y = "Count of Intron Retention Events") +
   theme_minimal()
 ```
 
@@ -99,8 +100,8 @@ retention_df$length_bin <- cut(retention_df$LENGTH,
 ggplot(retention_df, aes(x = length_bin, y = Median, fill = length_bin)) +
   geom_boxplot(outlier.shape = NA) +
   stat_summary(fun = median, geom = "point", color = "black", size = 2) +
-  labs(title = "Median PSI by Intron Length Deciles",
-       x = "Intron Length Bin (Decile + Range)",
+  labs(title = "Median Percent Spliced In (PSI) by Intron Length Deciles",
+       x = "Intron Length Bin (Decile + Range in bases)",
        y = "Median PSI",
        fill = "Length Bin") +
   theme_minimal() +
@@ -110,11 +111,11 @@ ggplot(retention_df, aes(x = length_bin, y = Median, fill = length_bin)) +
 
 ```{r}
 # Histogram of Max PSI across all IR Events
-ggplot(metaPsi, aes(x = Max)) +
-    geom_histogram(binwidth = 5, fill = "steelblue", colour = "black") +
-    labs(title = "Distribution of Max PSI Values",
-         x = "Max PSI (%)",
-         y = "Count of Splicing Events") +
+ggplot(metaPsi, aes(x = Mean)) +
+    geom_histogram(binwidth = 4, fill = "steelblue", colour = "black") +
+    labs(title = "Distribution of Average Percent Spliced In (PSI) Values",
+         x = "Average PSI (%)",
+         y = "Count of Intron Retention Events") +
     theme_minimal()
 ```
 
@@ -162,16 +163,43 @@ youngPrefixes <- c("Amnion", "Embr", "ESC", "iPS", "MSC", "NCC", "NPC", "Oocyte"
                    "Young", "Zygote")
 sampleIrDf$Group <- ifelse(grepl(paste0("^(", paste(youngPrefixes, collapse = "|"), ")"),
                                  sampleIrDf$Sample),
-                           "young", "mature")
+                           "Developmental", "Mature")
 
 # Plot IR counts per sample
 ggplot(sampleIrDf, aes(y = reorder(Sample, IrEventCount), x = IrEventCount, fill = Group)) +
   geom_bar(stat = "identity") +
-  labs(title = "Total Intron Retention Events per Sample (PSI ≥ 15)",
-       y = "Sample",
-       x = "Number of IR Events",
+  labs(title = "Total Intron Retention Events in Top 30 Tissue Samples (PSI ≥ 15)",
+       y = "Tissue Sample",
+       x = "Number of Intron Retention Events",
        fill = "Group") +
-  scale_fill_manual(values = c("young" = "firebrick", "mature" = "darkgreen")) +
+  scale_fill_manual(values = c("Developmental" = "turquoise", "Mature" = "salmon")) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 7))
+```
+
+```{r}
+# IR event count per sample
+sampleIrCounts <- colSums(binaryPsi)
+sampleIrDf <- data.frame(Sample = names(sampleIrCounts),
+                         IrEventCount = as.integer(sampleIrCounts))
+
+# Group samples
+youngPrefixes <- c("Amnion", "Embr", "ESC", "iPS", "MSC", "NCC", "NPC", "Oocyte", 
+                   "Pancreas_Alpha_Young", "Pancreas_Beta_Young", "Pancreas_Duct_Young", "Placenta", 
+                   "Young", "Zygote")
+sampleIrDf$Group <- ifelse(grepl(paste0("^(", paste(youngPrefixes, collapse = "|"), ")"),
+                                 sampleIrDf$Sample),
+                           "Developmental", "Mature")
+sampleIrDf <- sampleIrDf[order(-sampleIrDf$IrEventCount), ][1:30, ]
+
+# Plot IR counts per sample
+ggplot(sampleIrDf, aes(y = reorder(Sample, IrEventCount), x = IrEventCount, fill = Group)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Intron Retention Events in Top 30 Tissue Samples (PSI ≥ 15)",
+       y = "Tissue Sample",
+       x = "Number of Intron Retention Events",
+       fill = "Group") +
+  scale_fill_manual(values = c("Developmental" = "turquoise", "Mature" = "salmon")) +
   theme_minimal() +
   theme(axis.text.y = element_text(size = 7))
 ```
