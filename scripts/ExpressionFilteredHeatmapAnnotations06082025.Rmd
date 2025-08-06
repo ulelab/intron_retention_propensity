@@ -70,13 +70,14 @@ tissueAnnotation2$TotalCounts <- totalCounts
 # Determine low-expression events (bottom 25% cRPKM genes set to 0)
 exprCols <- grep("-cRPKM$", colnames(expressionClean), value = TRUE)
 allExprValues <- unlist(expressionClean[, ..exprCols], use.names = FALSE)
-exprThreshold <- quantile(allExprValues, probs = 0.25, na.rm = TRUE)
+exprThreshold <- quantile(allExprValues[allExprValues > 0], probs = 0.25, na.rm = TRUE)
 
 # Set values below threshold to 0
 expressionCleanLowMasked <- copy(expressionClean)
 for (col in exprCols) {
   expressionCleanLowMasked[[col]][expressionCleanLowMasked[[col]] <= exprThreshold] <- 0
 }
+
 # Remove duplicated GENE rows, keeping the first occurrence
 expressionCleanUnique <- expressionCleanLowMasked[!duplicated(expressionCleanLowMasked$GENE), ]
 ```
