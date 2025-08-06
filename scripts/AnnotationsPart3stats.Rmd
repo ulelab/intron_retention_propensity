@@ -8,7 +8,7 @@ output: html_document
 ```{r}
 library(data.table)
 
-merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedwithtransposon_final06072025.tsv")
+merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/IntronRetentionEventsAnnotatedMKJ06072025.tsv")
 
 predict <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/Intersect_f250_CrypticPRPF8.bed")
 ```
@@ -48,7 +48,7 @@ summary_df <- as.data.frame(hits) %>%
 merged$predict_overlap_sum <- 0  # default to 0
 merged$predict_overlap_sum[summary_df$queryHits] <- summary_df$overlap_sum
 merged <- merged %>%
-  relocate(predict_overlap_sum, .after = 1)
+  relocate(predict_overlap_sum, .after = 1) # relocate overlap sum to second col
 
 ```
 
@@ -76,6 +76,7 @@ merged$CLUSTER <- factor(merged$CLUSTER, levels = c(1, 2, 4, 3), ordered = TRUE)
 model <- polr(CLUSTER ~ predict_overlap_sum, data = merged, method = "logistic", Hess = TRUE)
 summary(model)
 ```
+
 ```{r}
 merged$log_LENGTH <- log10(merged$LENGTH)
 
@@ -99,6 +100,22 @@ ggplot(merged, aes(x = factor(CLUSTER), y = LENGTH, fill = factor(CLUSTER))) +
     ) +
     theme_minimal(base_size = 14) +
     theme(legend.position = "none")
+```
+
+```{r}
+ggplot(merged, aes(x = factor(CLUSTER), y = LENGTH, fill = factor(CLUSTER))) +
+    geom_violin(trim = FALSE, scale = "width", colour = "black", alpha = 0.7) +
+    geom_boxplot(width = 0.1, outlier.shape = NA, fill = "white", colour = "black") +
+    scale_fill_brewer(palette = "Set2", name = "Cluster") +
+    labs(
+        title = "Intron length does not influence PSI cluster identity",
+        x = "Intron retention category",
+        y = "Base pair length (log scale)"
+    ) +
+    coord_cartesian(ylim = c(0, 25000)) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none")
+```
 ```
 
 ```{r}
