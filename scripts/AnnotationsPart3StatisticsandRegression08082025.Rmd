@@ -1,5 +1,5 @@
 ---
-title: "AnnotationsPart3"
+title: "AnnotationsPart3StatisticsandRegression"
 author: "Michael K. Jones"
 date: "2025-07-05"
 output: html_document
@@ -10,18 +10,20 @@ library(data.table)
 
 merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/IntronRetentionEventsAnnotatedMKJ06072025.tsv")
 predict <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/Intersect_f250_CrypticPRPF8.bed")
+splice <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/Intersect_f250_CrypticsNoPRPF8Overlap.bed")
 ```
+
 ```{r}
 predict <- predict[predict[[7]] != 0, ]
 library(GenomicRanges)
 library(dplyr)
+library(ggplot2)
 
 # Extract strand from FullCO and insert as column 16
 merged <- merged %>%
   mutate(strand = substr(FullCO, nchar(FullCO), nchar(FullCO))) %>%
   relocate(strand, .after = 15)
-```
-```{r}
+
 # Convert to GRanges
 gr_merged <- GRanges(seqnames = merged$chrom,
                      ranges = IRanges(start = merged$start, end = merged$end),
@@ -30,24 +32,45 @@ gr_merged <- GRanges(seqnames = merged$chrom,
 gr_predict <- GRanges(seqnames = predict$V1,
                       ranges = IRanges(start = predict$V2, end = predict$V3),
                       strand = predict$V4)
-```
-```{r}
+
 # Find overlaps
 hits <- findOverlaps(gr_merged, gr_predict, ignore.strand = FALSE)
-```
-```{r}
+
 # Summarise overlaps
 summary_df <- as.data.frame(hits) %>%
   mutate(value = predict$V7[subjectHits]) %>%
   group_by(queryHits) %>%
   summarise(overlap_sum = sum(value, na.rm = TRUE), .groups = "drop")
-```
-```{r}
+
 # Add overlap summary back into merged, preserving all rows
 merged$predict_overlap_sum <- 0  # default to 0
 merged$predict_overlap_sum[summary_df$queryHits] <- summary_df$overlap_sum
 merged <- merged %>%
   relocate(predict_overlap_sum, .after = 1) # relocate overlap sum to second col
+```
+```{r}
+# Build GRanges for cryptic splice predictions that don't overlap with PRPF8 predictions
+gr_splice <- GRanges(
+  seqnames = splice$V1,
+  ranges   = IRanges(start = splice$V2, end = splice$V3),
+  strand   = splice$V6
+)
+
+# Find overlaps of merged introns vs splice predictions
+hits_splice <- findOverlaps(gr_merged, gr_splice, ignore.strand = FALSE)
+
+# Count one per splice hit, per merged intron
+summary_splice_df <- as.data.frame(hits_splice) %>%
+  group_by(queryHits) %>%
+  summarise(splice_overlap_count = n(), .groups = "drop")
+
+# Add back into merged, defaulting to 0
+merged$splice_overlap_count <- 0
+merged$splice_overlap_count[ summary_splice_df$queryHits ] <- summary_splice_df$splice_overlap_count
+
+# Relocate for convenience (just after predict_overlap_sum)
+merged <- merged %>%
+  relocate(splice_overlap_count, .after = predict_overlap_sum)
 ```
 
 ```{r}
@@ -75,9 +98,9 @@ ggplot(merged, aes(x = predict_overlap_sum, y = psi_binarised_total / 145)) +
               method.args = list(family = "binomial"),
               aes(weight = 145),
               se = TRUE, colour = "darkred") +
-  labs(x = "Predicted Overlap Sum", 
-       y = "Proportion PSI Binarised (0–1)",
-       title = "Binomial Logistic Regression Fit") +
+  labs(x = "Combined PRPF8 + Splice Site Prediction Sum", 
+       y = "Proportion of Tissues with >10% PSI",
+       title = "Combined Model Binomial Logistic Regression") +
   theme_minimal()
 ```
 
@@ -87,7 +110,7 @@ fit_length <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ LENGTH
                   data = merged, family = binomial)
 
 # Plot
-ggplot(merged, aes(x = log_length, y = psi_binarised_total / 145)) +
+ggplot(merged, aes(x = LENGTH, y = psi_binarised_total / 145)) +
   geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
   stat_smooth(method = "glm",
               method.args = list(family = "binomial"),
@@ -97,6 +120,33 @@ ggplot(merged, aes(x = log_length, y = psi_binarised_total / 145)) +
        y = "Proportion PSI Binarised (0–1)",
        title = "Binomial Logistic Regression: Length vs PSI") +
   theme_minimal()
+```
+```{r}
+# Fit binomial logistic regression on splice_overlap_count
+fit_splice <- glm(
+  cbind(psi_binarised_total, failures) ~ splice_overlap_count,
+  data = merged, family = binomial
+)
+
+# Plot splice‐site count model
+ggplot(merged, aes(
+      x = splice_overlap_count,
+      y = psi_binarised_total / 145
+    )) +
+  geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
+  stat_smooth(
+    method = "glm",
+    method.args = list(family = "binomial"),
+    aes(weight = 145),
+    se = TRUE, colour = "salmon"
+  ) +
+  labs(
+    x     = "Number of Splice‐site Predictions per Intron",
+    y     = "Proportion of Tissues with >10% PSI",
+    title = "Binomial Logistic Regression: Splice‐site Count vs PSI"
+  ) +
+  theme_minimal()
+
 ```
 ```{r}
 # First model with predict_overlap_sum
@@ -113,10 +163,47 @@ cat("McFadden R² (overlap):", round(pseudo_r2(fit_overlap), 4), "\n\n")
 
 cat("AIC (length):", AIC(fit_length), "\n")
 cat("McFadden R² (length):", round(pseudo_r2(fit_length), 4), "\n")
+
+cat("AIC (splice count):", AIC(fit_splice), "\n")
+cat("McFadden R² (splice count):", round(pseudo_r2(fit_splice), 4), "\n")
 ```
 
 ```{r}
-library(ggplot2)
+# Check if splice predictions fit better if we weight their value using signal strength by summing column 5
+summary_splice_score <- as.data.frame(hits_splice) %>%
+  mutate(score = splice$V5[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(splice_score_sum = sum(score, na.rm = TRUE),
+            .groups = "drop")
+
+# Inject into merged
+merged$splice_score_sum <- 0
+merged$splice_score_sum[summary_splice_score$queryHits] <- summary_splice_score$splice_score_sum
+merged <- merged %>% relocate(splice_score_sum, .after = predict_overlap_sum)
+
+# Fit binomial model on summed scores
+fit_splice_score <- glm(cbind(psi_binarised_total, failures) ~ splice_score_sum,
+                        data = merged, family = binomial)
+
+# Plot summed-score effect
+ggplot(merged, aes(x = splice_score_sum, y = psi_binarised_total/145)) +
+  geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
+  stat_smooth(method = "glm",
+              method.args = list(family = "binomial"),
+              aes(weight = 145),
+              se = TRUE, colour = "turquoise") +
+  labs(x     = "Sum of Splice‐site V5 Scores per Intron",
+       y     = "Proportion of Tissues with >10% PSI",
+       title = "Binomial Logistic Regression: Splice‐site Score vs PSI") +
+  theme_minimal()
+
+# Compare fit stats
+cat("AIC (splice score):", AIC(fit_splice_score), "\n")
+cat("McFadden R² (splice score):", round(pseudo_r2(fit_splice_score), 4), "\n")
+
+```
+
+```{r}
 
 ggplot(merged, aes(x = factor(CLUSTER), y = LENGTH, fill = factor(CLUSTER))) +
     geom_violin(trim = FALSE, scale = "width", colour = "black", alpha = 0.7) +
@@ -146,7 +233,6 @@ ggplot(merged, aes(x = factor(CLUSTER), y = LENGTH, fill = factor(CLUSTER))) +
     theme_minimal(base_size = 14) +
     theme(legend.position = "none")
 ```
-```
 
 ```{r}
 library(data.table)
@@ -159,8 +245,8 @@ psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
 
 merged$mean_PSI <- rowMeans(merged[, ..psi_cols], na.rm = TRUE)
 
-# Step 2: Binary transposon presence (cols 26–34)
-trans_binary <- merged[, 26:34] %>%
+# Step 2: Binary transposon presence
+trans_binary <- merged[, 30:38] %>%
   mutate(across(everything(), ~ ifelse(is.na(.) | . == "", 0, 1)))
 
 # Rename illegal column name
@@ -178,12 +264,42 @@ model_lm <- lm(mean_PSI ~ sine + line + dna + ltr + Retroposon_SVA +
 summary(model_lm)
 
 ```
+### OLD SCRIPT BELOW THIS SECTION ###
+ ###                               ###
+  ###                               ###
+   ###                               ###
+  ###                               ###
+ ###                               ###
+###                               ###
+ ###                               ###
+  ###                               ###
+   ###                               ###
+  ###                               ###
+ ###                               ###
+###                               ###
+ ###                               ###
+  ###                               ###
+   ###                               ###
+  ###                               ###
+ ###                               ###
+###                               ###
+ ###                               ###
+  ###                               ###
+   ###                               ###
+  ###                               ###
+ ###                               ###
+###                               ###
+ ###                               ###
+  ###                               ###
+   ###                               ###
+  ###                               ###
+ ###                               ###
 
-```{r}
+```{r
 library(dplyr)
 
-# Define transposon columns by name (original positions 26:34)
-transposon_cols <- colnames(merged)[26:34]
+# Define transposon columns by name
+transposon_cols <- colnames(merged)[29:37]
 
 # Clean and summarise
 summary_table <- merged %>%
@@ -194,15 +310,13 @@ summary_table <- merged %>%
 
 ```
 
-```{r}
+```{r
 # Step 1: Count total entries per CLUSTER
 cluster_sizes <- merged %>%
   group_by(CLUSTER) %>%
   summarise(cluster_total = n())
 
 # Step 2: Get transposon sums per CLUSTER
-transposon_cols <- colnames(merged)[26:34]
-
 transposon_sums <- merged %>%
   mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1))) %>%
   group_by(CLUSTER) %>%
@@ -213,12 +327,12 @@ transposon_enrichment <- left_join(transposon_sums, cluster_sizes, by = "CLUSTER
   mutate(across(starts_with("sum_"), ~ . / cluster_total, .names = "rel_{.col}"))
 ```
 
-```{r}
+```{r
 library(dplyr)
 library(tidyr)
 
 # Step 1: Transposon column names (from merged)
-transposon_cols <- colnames(merged)[26:34]
+transposon_cols <- colnames(merged)[29:37]
 
 # Step 2: Binarise transposon presence
 merged_bin <- merged %>%
@@ -261,9 +375,7 @@ enrichment$enrichment_score <- format(enrichment$enrichment_score, scientific = 
 
 ```
 
-```{r}
-merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/mergedwithtransposon_final06072025.tsv")
-
+```{r
 # Use the same PSI column detection
 psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
 
@@ -271,7 +383,7 @@ psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
 merged$median_PSI <- apply(merged[, ..psi_cols], 1, median, na.rm = TRUE)
 
 # Binary transposon matrix
-trans_binary <- merged[, 26:34] %>%
+trans_binary <- merged[, 29:37] %>%
   mutate(across(everything(), ~ ifelse(is.na(.) | . == "", 0, 1)))
 
 colnames(trans_binary)[colnames(trans_binary) == "Retroposon/SVA"] <- "Retroposon_SVA"

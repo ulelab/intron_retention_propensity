@@ -48,7 +48,7 @@ breaks <- c(lowExprSentinel, seq(0, 100, length.out = n_colors + 1))
 ```
 
 ```{r}
-png("IRHeatmapFinal15072025.png", width = 1600, height = 1600, res = 150)
+png("IRHeatmapTest.png", width = 1600, height = 1600, res = 150)
 pheatmap(matrixOrdered,
          cluster_rows = FALSE,
          cluster_cols = TRUE,
