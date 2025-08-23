@@ -1,0 +1,62 @@
+---
+title: "braunschweigtypes"
+author: "Michael K. Jones"
+date: "2025-08-11"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(GenomicRanges)
+
+# Load the tab file (cols: 1=chr, 2=start, 3=end, 5=strand, 6=meta)
+dt <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/braunschweigintrons_hg38.bed")
+setnames(dt, c("chr","start","end","meta","v5","strand"))
+dt[, chr := sub("^chr", "", chr)]
+dt[, meta_last := sub(".*:([^:]+)$", "\\1", meta)]
+
+gr_introns <- GRanges(
+  seqnames = dt$chr,
+  ranges   = IRanges(start = dt$start, end = dt$end),
+  strand   = dt$strand
+)
+
+# Carry metadata
+mcols(gr_introns) <- dt
+
+# Nearest mapping from gr_meta -> gr_introns
+nearest_hits <- nearest(gr_meta, gr_introns, ignore.strand = FALSE)
+
+# Merge: keep all gr_meta metadata + the parsed meta_last from introns
+mergedAnno <- cbind(
+  mcols(gr_meta),
+  br_meta = mcols(gr_introns)$meta_last[nearest_hits]
+)
+
+mergedAnno_dt <- as.data.table(mergedAnno)
+mergedAnno_dt <- mergedAnno_dt[, c(2, 156), with = FALSE]
+
+annotation_row <- as.data.table(annotation_row, keep.rownames = "EVENT")
+res_full <- merge(annotation_row, mergedAnno_dt, by = "EVENT", all = TRUE)
+
+# add rownames as a new column called EVENT
+#annotation_row[, EVENT := rownames(annotation_row)]
+
+# Looks good on merge agreement
+
+res_full$IntronType <- NULL
+colnames(res_full)[colnames(res_full) == "br_meta"] <- "IntronType"
+
+# Label filtered introns as cluster 5 and order rows by Cluster
+levels(res_full$Cluster) <- c(levels(res_full$Cluster), "Cluster_5")
+res_full$Cluster[is.na(res_full$Cluster)] <- "Cluster_5"
+sum(res_full$Cluster == "Cluster_5", na.rm = TRUE)
+res_full <- res_full[order(res_full$Cluster), , drop = FALSE]
+
+# add rownames, drop rows that aren't in main data table and count, drop event column and save
+rownames(res_full) <- res_full$EVENT
+res_full <- res_full[rownames(res_full) %in% rownames(mergedCleanedData), ]
+sum(!rownames(res_full) %in% rownames(mergedCleanedData))
+res_full$EVENT <- NULL
+saveRDS(res_full, "annotation_rowtype12082025.rds")
+```
