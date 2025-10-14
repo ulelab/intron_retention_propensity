@@ -1,0 +1,19 @@
+---
+title: "Stau2Exons"
+author: "Michael K. Jones"
+date: "2025-10-13"
+output: html_document
+---
+
+```{r}
+library(data.table)
+psiTable <- fread("/Users/mikej/Documents/Career/Georges/Ule/projects/PSI_TABLE-hg38.tab.gz")
+
+# Create table containing only IR events, merge with summary statistics for exploration
+stau2 <- psiTable[grep("^STAU2", psiTable$GENE), ]               
+rownames(stau2) <- stau2$EVENT
+rn <- rownames(stau2)
+
+write.table(stau2, file = "stau2.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
