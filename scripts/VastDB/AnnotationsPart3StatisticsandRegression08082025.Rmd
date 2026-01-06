@@ -1,0 +1,636 @@
+---
+title: "AnnotationsPart3StatisticsandRegression"
+author: "Michael K. Jones"
+date: "2025-07-05"
+output: html_document
+---
+
+```{r}
+library(data.table)
+
+merged <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/VastDB/IntronRetentionPredictionsAnnotated13082025.tsv")
+#predict100 <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/DecoySpliceSites_f100.bed")
+#predict50 <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/DecoySpliceSites_f50.bed")
+#splice250 <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/NonPRPF8SpliceSites_f250.bed")
+#splice100 <- fread("/Users/mikej/Documents/Career/Georges/Ule/intron_retention_propensity/data/IR/NonPRPF8SpliceSites_f100.bed")
+```
+
+## Transposon linear regression analysis
+
+```{r}
+library(tidyverse)
+# Step 1: Select all *_PSI columns and compute row means
+psi_cols <- grep("_PSI$", colnames(merged), value = TRUE)
+
+merged$mean_PSI <- rowMeans(merged[, ..psi_cols], na.rm = TRUE)
+
+# Step 2: Binary transposon presence
+trans_binary <- merged[, 66:74] %>%
+  mutate(across(everything(), ~ ifelse(is.na(.) | . == "", 0, 1)))
+
+# Rename illegal column name
+colnames(trans_binary)[colnames(trans_binary) == "Retroposon/SVA"] <- "Retroposon_SVA"
+
+# Step 3: Combine into model input
+merged_for_lm <- bind_cols(mean_PSI = merged$mean_PSI, trans_binary) %>%
+  drop_na(mean_PSI)
+
+# Step 4: Linear regression
+model_lm <- lm(mean_PSI ~ sine + line + dna + ltr + Retroposon_SVA +
+                          satellite + Low_complexity + Simple_repeat + rna,
+               data = merged_for_lm)
+
+summary(model_lm)
+
+```
+## Binarise PSI values at a threshold of 10%
+
+```{r}
+# Binarise PSI values
+psi_mat <- as.data.frame(merged[, 75:219])
+psi_mat[] <- lapply(psi_mat, function(x) as.numeric(as.character(x)))
+psi_bin <- as.data.frame(lapply(psi_mat, function(x) ifelse(is.na(x), 0, ifelse(x >= 10, 1, 0))))
+psi_binarised_total <- rowSums(psi_bin, na.rm = TRUE)
+merged$psi_binarised_total <- psi_binarised_total
+
+```
+
+## Create histogram of all prediction overlap sum values and determine boundary of 95% confidence interval
+### 
+
+```{r}
+# plot of PRPF8 + splice sites distribution when intersected with f100 model (moderate conf)
+
+q <- quantile(merged$DecoySiteModerateConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = DecoySiteModerateConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "darkred") +
+  geom_vline(xintercept = q, linetype = "dashed") +
+  labs(x = "Distribution of Decoy Site Predictions",
+       y = "Count",
+       title = "Moderate confidence decoy site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7))
+
+# plot of PRPF8 + splice sites distribution when intersected with f50 model (high conf)
+
+q2 <- quantile(merged$DecoySiteHighConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = DecoySiteHighConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "darkorange") +
+  geom_vline(xintercept = q2, linetype = "dashed") +
+  labs(x = "Distribution of Decoy Site Predictions",
+       y = "Count",
+       title = "High confidence decoy site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7))
+
+# plot of non-PRPF8 overlapping splice sites when intersected with f100 model (moderate conf)
+
+s <- quantile(merged$NonPRPF8SpliceCountModerateConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = NonPRPF8SpliceCountModerateConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "darkgreen") +
+  geom_vline(xintercept = s, linetype = "dashed") +
+  labs(x = "Distribution of Splice Site Predictions",
+       y = "Count",
+       title = "Moderate confidence splice site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 150))
+
+# plot of non-PRPF8 overlapping splice sites when intersected with f250 model (high conf)
+
+s2 <- quantile(merged$NonPRPF8SpliceCountHighConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = NonPRPF8SpliceCountHighConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "navy") +
+  geom_vline(xintercept = s2, linetype = "dashed") +
+  labs(x = "Distribution of Splice Site Predictions",
+       y = "Count",
+       title = "High confidence splice site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 150))
+
+# plot of non-PRPF8 overlapping splice sites signal sums when intersected with f250 model (high conf)
+
+s3 <- quantile(merged$NonPRPF8SpliceSignalHighConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = NonPRPF8SpliceSignalHighConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "steelblue") +
+  geom_vline(xintercept = s3, linetype = "dashed") +
+  labs(x = "Sum of Splice Site Predictions",
+       y = "Count",
+       title = "High confidence splice site signal sums (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 5))
+
+# plot of non-PRPF8 overlapping splice sites signal sums when intersected with f100 model (moderate conf)
+
+s4 <- quantile(merged$NonPRPF8SpliceCountModerateConf, c(0.025, 0.975), na.rm = TRUE)
+
+ggplot(merged, aes(x = NonPRPF8SpliceSignalModerateConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "seagreen") +
+  geom_vline(xintercept = s4, linetype = "dashed") +
+  labs(x = "Sum of Splice Site Predictions",
+       y = "Count",
+       title = "Moderate confidence splice site signal sums (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 5))
+
+```
+```{r fig.width=15, fig.height=12}
+library(patchwork)
+library(scales)
+
+# plot of PRPF8 + splice sites distribution when intersected with f100 model (moderate conf)
+q <- quantile(merged$DecoySiteModerateConf, c(0.025, 0.975), na.rm = TRUE)
+p1 <- ggplot(merged, aes(x = DecoySiteModerateConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "darkred") +
+  geom_vline(xintercept = q, linetype = "dashed") +
+  labs(x = "Distribution of Decoy Site Predictions",
+       y = "Count",
+       title = "Moderate confidence decoy site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7))
+
+# plot of PRPF8 + splice sites distribution when intersected with f50 model (high conf)
+q2 <- quantile(merged$DecoySiteHighConf, c(0.025, 0.975), na.rm = TRUE)
+p2 <- ggplot(merged, aes(x = DecoySiteHighConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "darkorange") +
+  geom_vline(xintercept = q2, linetype = "dashed") +
+  labs(x = "Distribution of Decoy Site Predictions",
+       y = "Count",
+       title = "High confidence decoy site distribution (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7))
+
+# plot of non-PRPF8 overlapping splice sites signal sums when intersected with f100 model (moderate conf)
+s3 <- quantile(merged$NonPRPF8SpliceSignalModerateConf, c(0.025, 0.975), na.rm = TRUE)
+p3 <- ggplot(merged, aes(x = NonPRPF8SpliceSignalModerateConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "steelblue") +
+  geom_vline(xintercept = s3, linetype = "dashed") +
+  labs(x = "Sum of Splice Site Predictions",
+       y = "Count",
+       title = "Moderate confidence splice site signal sums (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7)) +
+  scale_y_continuous(labels = comma)
+
+# plot of non-PRPF8 overlapping splice sites signal sums when intersected with f250 model (high conf)
+s4 <- quantile(merged$NonPRPF8SpliceSignalHighConf, c(0.025, 0.975), na.rm = TRUE)
+p4 <- ggplot(merged, aes(x = NonPRPF8SpliceSignalHighConf)) +
+  geom_histogram(binwidth = 1, colour = "white", fill = "seagreen") +
+  geom_vline(xintercept = s4, linetype = "dashed") +
+  labs(x = "Sum of Splice Site Predictions",
+       y = "Count",
+       title = "High confidence splice site signal sums (dashed = 95% cutoffs)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(0, 7)) +
+  scale_y_continuous(labels = comma)
+
+# combine into a 2x2 grid
+(p1 | p2) /
+(p3 | p4)
+
+```
+
+## Calculate number of tissues with significant retention above 10 PSI threshold for each intron
+
+```{r}
+# Define number of trials
+merged$failures <- 145 - merged$psi_binarised_total
+
+# Fit binomial logistic regression
+fit <- glm(cbind(psi_binarised_total, failures) ~ DecoySiteModerateConf,
+           data = merged, family = binomial)
+
+# Create plot
+ggplot(merged, aes(x = DecoySiteModerateConf, y = psi_binarised_total / 145)) +
+  geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
+  stat_smooth(method = "glm", 
+              method.args = list(family = "binomial"),
+              aes(weight = 145),
+              se = TRUE, colour = "darkred") +
+  labs(x = "Decoy Splice Site Prediction Sum", 
+       y = "Proportion of Tissues with >10% PSI",
+       title = "Decoy splice site correlation with sum of significant IR tissues") +
+  theme_minimal()
+```
+
+## Trim model to central 95% and refit across all predictors
+
+```{r fig.width=15, fig.height=12}
+# Predictors to iterate over
+predictors <- c("DecoySiteModerateConf", "DecoySiteHighConf",
+                "NonPRPF8SpliceCountHighConf", "NonPRPF8SpliceSignalHighConf",
+                "NonPRPF8SpliceCountModerateConf", "NonPRPF8SpliceSignalModerateConf")
+
+labels <- c(
+  DecoySiteModerateConf   = "Moderate confidence decoy site distribution",
+  DecoySiteHighConf    = "High confidence decoy site distribution",
+  NonPRPF8SpliceCountModerateConf  = "Moderate confidence splice site distribution",
+  NonPRPF8SpliceCountHighConf  = "High confidence splice site distribution",
+  NonPRPF8SpliceSignalHighConf    = "High confidence splice site signal sums",
+  NonPRPF8SpliceSignalModerateConf    = "Moderate confidence splice site signal sums"
+)
+
+# Loop over binomial logistic regression:
+plots <- lapply(names(labels), function(var) {
+  
+  # Trim jitter points to central 95% interval
+  rng <- quantile(merged[[var]], c(0.025, 0.975), na.rm = TRUE)
+  df_trim <- merged %>%
+    filter(.data[[var]] >= rng[1],
+           .data[[var]] <= rng[2])
+  
+  ggplot(df_trim, aes_string(x = var, y = "psi_binarised_total / 145")) +
+    geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
+    stat_smooth(data = merged,   # keep model on full dataset
+                method = "glm",
+                method.args = list(family = "binomial"),
+                aes_string(x = var, y = "psi_binarised_total / 145", weight = "145"),
+                se = TRUE, level = 0.95, colour = "darkred") +
+    labs(x = labels[[var]],
+         y = "Proportion of Tissues with >10% PSI",
+         title = paste("Binomial logistic regression –", labels[[var]])) +
+    theme_minimal() +
+    coord_cartesian(xlim = c(0, 10))
+})
+
+# Show them in a grid
+wrap_plots(plots, ncol = 2)
+```
+
+## Calculate association strength with pseudo R^2 to compare predictors combined sums, intron length and cryptic only sums
+
+```{r}
+# --- Binomial GLMs for each predictor (successes vs failures) ---
+fit_predict100    <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ DecoySiteModerateConf,
+                         data = merged, family = binomial)
+fit_predict50     <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ DecoySiteHighConf,
+                         data = merged, family = binomial)
+fit_splice_cnt250 <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ NonPRPF8SpliceCountHighConf,
+                         data = merged, family = binomial)
+fit_NonPRPF8SpliceSignalHighConf <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ NonPRPF8SpliceSignalHighConf,
+                         data = merged, family = binomial)
+fit_splice_cnt100 <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ NonPRPF8SpliceCountModerateConf,
+                         data = merged, family = binomial)
+fit_NonPRPF8SpliceSignalModerateConf <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ NonPRPF8SpliceSignalModerateConf,
+                         data = merged, family = binomial)
+fit_length        <- glm(cbind(psi_binarised_total, 145 - psi_binarised_total) ~ LENGTH,
+                         data = merged, family = binomial)
+
+# --- McFadden pseudo R^2 using your prior methodology ---
+pseudo_r2 <- function(model) {
+  1 - (as.numeric(logLik(model)) / as.numeric(logLik(update(model, . ~ 1))))
+}
+
+# --- Collect fit stats into a comparison table ---
+fits <- list(
+  DecoySiteModerateConf   = fit_predict100,
+  DecoySiteHighConf    = fit_predict50,
+  NonPRPF8SpliceCountHighConf  = fit_splice_cnt250,
+  NonPRPF8SpliceSignalHighConf    = fit_NonPRPF8SpliceSignalHighConf,
+  NonPRPF8SpliceCountModerateConf  = fit_splice_cnt100,
+  NonPRPF8SpliceSignalModerateConf    = fit_NonPRPF8SpliceSignalModerateConf,
+  LENGTH           = fit_length
+)
+
+comp <- do.call(rbind, lapply(names(fits), function(nm) {
+  m <- fits[[nm]]
+  data.frame(
+    Predictor    = nm,
+    McFadden_R2  = round(pseudo_r2(m), 6),
+    AIC          = AIC(m),
+    LogLik       = round(as.numeric(logLik(m)), 2),
+    stringsAsFactors = FALSE
+  )
+}))
+
+# View table (descending)
+comp[order(-comp$McFadden_R2), ]
+
+```
+## Trimming predictors to central 95% and refit analysis shows better fit for nonPRPF8 intronic splice sites and worse fit for decoy sites
+
+```{r}
+# predictors to trim & fit
+vars <- c("DecoySiteModerateConf", "DecoySiteHighConf",
+          "NonPRPF8SpliceCountHighConf", "NonPRPF8SpliceSignalHighConf",
+          "NonPRPF8SpliceCountModerateConf", "NonPRPF8SpliceSignalModerateConf",
+          "LENGTH")
+
+comp_trim <- do.call(rbind, lapply(vars, function(v) {
+  # trim to central 95% of this predictor
+  rng <- quantile(merged[[v]], c(0.025, 0.975), na.rm = TRUE)
+  d   <- merged %>% filter(.data[[v]] >= rng[1], .data[[v]] <= rng[2])
+
+  # fit GLM on trimmed data
+  fml <- as.formula(paste("cbind(psi_binarised_total, 145 - psi_binarised_total) ~", v))
+  m   <- glm(fml, data = d, family = binomial)
+
+  # McFadden pseudo-R2 (inline, no helper)
+  r2 <- 1 - (as.numeric(logLik(m)) / as.numeric(logLik(update(m, . ~ 1))))
+
+  data.frame(
+    Subset      = "Central 95% of predictor",
+    Predictor   = v,
+    N           = nrow(d),
+    McFadden_R2 = round(r2, 6),
+    AIC         = AIC(m),
+    LogLik      = as.numeric(logLik(m)),
+    stringsAsFactors = FALSE
+  )
+}))
+
+# view (e.g., sorted by McFadden R2)
+comp_trim[order(-comp_trim$McFadden_R2), ]
+
+
+```
+
+## plot the regression against length to visually compare association strength
+
+```{r}
+# Plot
+ggplot(merged, aes(x = LENGTH, y = psi_binarised_total / 145)) +
+  geom_jitter(width = 0.2, height = 0.02, alpha = 0.4) +
+  stat_smooth(method = "glm",
+              method.args = list(family = "binomial"),
+              aes(weight = 145),
+              se = TRUE, colour = "steelblue") +
+  labs(x = "Length",
+       y = "Proportion PSI Binarised (0–1)",
+       title = "Binomial Logistic Regression: Length vs Proportion of Tissues with >10% PSI") +
+  theme_minimal()
+```
+
+## Plot box plots
+
+```{r}
+# --- define the six predictors (no LENGTH) ---
+vars <- c(
+  "DecoySiteModerateConf",
+  "DecoySiteHighConf",
+  "NonPRPF8SpliceCountModerateConf",
+  "NonPRPF8SpliceCountHighConf",
+  "NonPRPF8SpliceSignalHighConf",
+  "NonPRPF8SpliceSignalModerateConf"
+)
+
+labels <- c(
+  DecoySiteModerateConf            = "Moderate confidence decoy site distribution",
+  DecoySiteHighConf                = "High confidence decoy site distribution",
+  NonPRPF8SpliceCountModerateConf  = "Moderate confidence splice site distribution",
+  NonPRPF8SpliceCountHighConf      = "High confidence splice site distribution",
+  NonPRPF8SpliceSignalHighConf     = "High confidence splice site signal sums",
+  NonPRPF8SpliceSignalModerateConf = "Moderate confidence splice site signal sums"
+)
+
+fills <- c(
+  DecoySiteModerateConf            = "darkred",
+  DecoySiteHighConf                = "darkorange",
+  NonPRPF8SpliceCountHighConf      = "navy",
+  NonPRPF8SpliceSignalHighConf     = "steelblue",
+  NonPRPF8SpliceCountModerateConf  = "darkgreen",
+  NonPRPF8SpliceSignalModerateConf = "seagreen"
+)
+
+# long format with predictor 'value' and psi
+df_long <- merged %>%
+  dplyr::select(dplyr::all_of(vars), psi_binarised_total) %>%
+  tidyr::pivot_longer(dplyr::all_of(vars), names_to = "variable", values_to = "value") %>%
+  dplyr::filter(!is.na(value)) %>%
+  dplyr::mutate(
+    # thresholds by predictor: drop zeros for counts/decoys; drop <0.02 for signals
+    min_threshold = dplyr::case_when(
+      variable %in% c("NonPRPF8SpliceSignalHighConf", "NonPRPF8SpliceSignalModerateConf") ~ 0.02,
+      TRUE ~ 0
+    ),
+    var_label = factor(variable, levels = vars, labels = labels[vars])
+  )
+
+# prefilter by threshold, then compute per-variable 95% window on the predictor
+df_trim <- df_long %>%
+  dplyr::group_by(variable) %>%
+  dplyr::filter(value > min_threshold) %>%                                       # <- key prefilter
+  dplyr::mutate(
+    lo = stats::quantile(value, 0.025, na.rm = TRUE),
+    hi = stats::quantile(value, 0.975, na.rm = TRUE)
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(value >= lo, value <= hi)
+
+# optional: a compact data table describing what was kept per facet
+keep_summary <- df_trim %>%
+  dplyr::group_by(variable, var_label) %>%
+  dplyr::summarise(
+    threshold_used = dplyr::first(min_threshold),
+    pred_lo = dplyr::first(lo),
+    pred_hi = dplyr::first(hi),
+    n_rows = dplyr::n(),
+    .groups = "drop"
+  )
+print(keep_summary)
+```
+
+```{r fig.width=12, fig.height=8}
+ggplot2::ggplot(df_trim, ggplot2::aes(x = factor(1), y = psi_binarised_total, fill = variable)) +
+  ggplot2::geom_boxplot(width = 0.5, colour = "black", outlier.shape = NA) +
+  ggplot2::facet_wrap(~ var_label, ncol = 3) +
+  ggplot2::coord_cartesian(ylim = c(1, 50)) +   # zooms without recomputing stats
+  ggplot2::scale_fill_manual(values = fills, guide = "none") +
+  ggplot2::labs(
+    title = "PSI (binarised total) across central 95% of each predictor",
+    subtitle = "Counts/decoys: drop zeros; signals: drop < 0.02; then keep predictor’s 2.5–97.5% window",
+    x = NULL, y = "psi_binarised_total"
+  ) +
+  ggplot2::theme_minimal(base_size = 14) +
+  ggplot2::theme(
+    axis.text.x  = ggplot2::element_blank(),
+    axis.ticks.x = ggplot2::element_blank(),
+    strip.text   = ggplot2::element_text(face = "bold")
+  )
+
+```
+
+## Plot length capped at 25kb against cluster identity
+
+```{r}
+ggplot(merged, aes(x = factor(Cluster), y = LENGTH, fill = factor(Cluster))) +
+    geom_violin(trim = FALSE, scale = "width", colour = "black", alpha = 0.7) +
+    geom_boxplot(width = 0.1, outlier.shape = NA, fill = "white", colour = "black") +
+    scale_fill_brewer(palette = "Set2", name = "Cluster") +
+    labs(
+        title = "Intron length does not influence PSI cluster identity",
+        x = "Intron retention category",
+        y = "Base pair length"
+    ) +
+    coord_cartesian(ylim = c(0, 25000)) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none")
+```
+### OLD SCRIPT BELOW THIS SECTION ###
+
+## Use Genomic Ranges to overlap predictions with introns, summarise number of predictions for each intron
+
+library(GenomicRanges)
+library(dplyr)
+library(ggplot2)
+
+## Convert to GRanges
+gr_merged <- GRanges(seqnames = merged$chrom,
+                     ranges = IRanges(start = merged$start, end = merged$end),
+                     strand = merged$strand)
+
+gr_predict100 <- GRanges(seqnames = predict100$V1,
+                      ranges = IRanges(start = predict100$V2, end = predict100$V3),
+                      strand = predict100$V6)
+
+## Find overlaps
+hits <- findOverlaps(gr_merged, gr_predict100, ignore.strand = FALSE)
+
+## Summarise overlaps
+summary_df <- as.data.frame(hits) %>%
+  mutate(value = predict100$V7[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(overlap_sum100 = sum(value, na.rm = TRUE), .groups = "drop")
+
+## Add Moderate Confidence Decoy overlap summary back into merged, preserving all rows
+merged$DecoySiteModerateConf <- 0  # default to 0
+merged$DecoySiteModerateConf[summary_df$queryHits] <- summary_df$overlap_sum100
+merged <- merged %>%
+  relocate(DecoySiteModerateConf, .after = 1) # relocate overlap sum to second col
+
+## repeat this process for predict f50 (High Confidence Decoy)
+gr_predict50 <- GRanges(seqnames = predict50$V1,
+                      ranges = IRanges(start = predict50$V2, end = predict50$V3),
+                      strand = predict50$V6)
+
+## Find overlaps
+hits2 <- findOverlaps(gr_merged, gr_predict50, ignore.strand = FALSE)
+
+## Summarise overlaps
+summary_df <- as.data.frame(hits2) %>%
+  mutate(value = predict50$V7[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(overlap_sum50 = sum(value, na.rm = TRUE), .groups = "drop")
+
+## Add overlap summary back into merged, preserving all rows
+merged$DecoySiteHighConf <- 0  # default to 0
+merged$DecoySiteHighConf[summary_df$queryHits] <- summary_df$overlap_sum50
+merged <- merged %>%
+  relocate(DecoySiteHighConf, .after = 2) # relocate overlap sum to second col
+
+
+# Create an additional GRanges object for cryptic splice predictions that don't overlap PRPF8 predictions
+
+## Build GRanges for HIGH CONFIDENCE cryptic splice predictions that don't overlap with PRPF8 predictions
+gr_splice250 <- GRanges(
+  seqnames = splice250$V1,
+  ranges   = IRanges(start = splice250$V2, end = splice250$V3),
+  strand   = splice250$V6
+)
+
+## Find overlaps of merged introns vs splice predictions
+hits_splice <- findOverlaps(gr_merged, gr_splice250, ignore.strand = FALSE)
+
+## Count one per splice hit, per merged intron
+summary_splice_df <- as.data.frame(hits_splice) %>%
+  group_by(queryHits) %>%
+  summarise(NonPRPF8SpliceCountHighConf = n(), .groups = "drop")
+
+## Add back into merged, defaulting to 0
+merged$NonPRPF8SpliceCountHighConf <- 0
+merged$NonPRPF8SpliceCountHighConf[ summary_splice_df$queryHits ] <- summary_splice_df$NonPRPF8SpliceCountHighConf
+
+## Relocate for convenience (just after predict_overlap_sum)
+merged <- merged %>%
+  relocate(NonPRPF8SpliceCountHighConf, .after = DecoySiteHighConf)
+
+## Check if splice predictions fit better weighted by summing their signal strength
+summary_splice_score <- as.data.frame(hits_splice) %>%
+  mutate(score = splice250$V5[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(NonPRPF8SpliceSignalHighConf = sum(score, na.rm = TRUE),
+            .groups = "drop")
+
+## Inject into merged
+merged$NonPRPF8SpliceSignalHighConf <- 0
+merged$NonPRPF8SpliceSignalHighConf[summary_splice_score$queryHits] <- summary_splice_score$NonPRPF8SpliceSignalHighConf
+merged <- merged %>% relocate(NonPRPF8SpliceSignalHighConf, .after = NonPRPF8SpliceCountHighConf)
+
+
+# REPEAT Build GRanges for Moderate confidence cryptic splice predictions that don't overlap with PRPF8 predictions
+
+gr_splice100 <- GRanges(
+  seqnames = splice100$V1,
+  ranges   = IRanges(start = splice100$V2, end = splice100$V3),
+  strand   = splice100$V6
+)
+
+## Find overlaps of merged introns vs splice predictions
+hits_splice2 <- findOverlaps(gr_merged, gr_splice100, ignore.strand = FALSE)
+
+## Count one per splice hit, per merged intron
+summary_splice_df <- as.data.frame(hits_splice2) %>%
+  group_by(queryHits) %>%
+  summarise(NonPRPF8SpliceCountModerateConf = n(), .groups = "drop")
+
+## Add back into merged, defaulting to 0
+merged$NonPRPF8SpliceCountModerateConf <- 0
+merged$NonPRPF8SpliceCountModerateConf[ summary_splice_df$queryHits ] <- summary_splice_df$NonPRPF8SpliceCountModerateConf
+
+## Relocate for convenience (just after predict_overlap_sum)
+merged <- merged %>%
+  relocate(NonPRPF8SpliceCountModerateConf, .after = NonPRPF8SpliceSignalHighConf)
+
+## Check if splice predictions fit better weighted by summing their signal strength
+summary_splice_score <- as.data.frame(hits_splice2) %>%
+  mutate(score = splice100$V5[subjectHits]) %>%
+  group_by(queryHits) %>%
+  summarise(NonPRPF8SpliceCountModerateConf = sum(score, na.rm = TRUE),
+            .groups = "drop")
+
+## Inject into merged
+merged$NonPRPF8SpliceCountModerateConf <- 0
+merged$NonPRPF8SpliceCountModerateConf[summary_splice_score$queryHits] <- summary_splice_score$NonPRPF8SpliceCountModerateConf
+merged <- merged %>% relocate(NonPRPF8SpliceCountModerateConf, .after = NonPRPF8SpliceCountModerateConf)
+
+## Write to TSV
+write.table(
+  merged,
+  file = "mergedPredictions192951introns.tsv",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE,
+)
+
+# Creation of transposable element overrepresentation tables
+
+library(dplyr)
+
+## Define transposon columns by name
+transposon_cols <- colnames(merged)[29:37]
+
+## Clean and summarise
+summary_table <- merged %>%
+  mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1))) %>%
+  group_by(CLUSTER) %>%
+  summarise(across(all_of(transposon_cols), sum))
+
+
+## Step 1: Count total entries per CLUSTER
+cluster_sizes <- merged %>%
+  group_by(CLUSTER) %>%
+  summarise(cluster_total = n())
+
+## Step 2: Get transposon sums per CLUSTER
+transposon_sums <- merged %>%
+  mutate(across(all_of(transposon_cols), ~ ifelse(is.na(.) | . == "", 0, 1))) %>%
+  group_by(CLUSTER) %>%
+  summarise(across(all_of(transposon_cols), sum, .names = "sum_{.col}"))
+
+## Step 3: Join totals and compute proportions (overrepresentation)
+transposon_enrichment <- left_join(transposon_sums, cluster_sizes, by = "CLUSTER") %>%
+  mutate(across(starts_with("sum_"), ~ . / cluster_total, .names = "rel_{.col}"))

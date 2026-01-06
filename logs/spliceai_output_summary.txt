@@ -1,0 +1,114 @@
+================================================================================
+                    SPLICEAI OUTPUT FILES SUMMARY
+================================================================================
+
+TOTAL STATISTICS:
+-----------------
+Total files:           53
+Total lines:           56,174 (including headers)
+Total decoy IDs:       56,121 (before deduplication)
+
+Note: After combining, duplicate decoy IDs will be removed, so the final
+      combined file will have fewer unique rows.
+
+================================================================================
+DETAILED FILE LISTING (sorted alphabetically)
+================================================================================
+
+FILE                                    LINES    DECOYS
+------------------------------------------------------------
+chr10_part1_spliceai_scores.tsv         1,079    1,078
+chr10_part2_spliceai_scores.tsv         1,078    1,077
+chr11_part1_spliceai_scores.tsv         1,004    1,003
+chr11_part2_spliceai_scores.tsv         1,004    1,003
+chr11_part3_spliceai_scores.tsv         1,003    1,002
+chr12_part1_spliceai_scores.tsv         1,047    1,046
+chr12_part2_spliceai_scores.tsv         1,047    1,046
+chr12_part3_spliceai_scores.tsv         1,046    1,045
+chr13_part1_spliceai_scores.tsv         1,146    1,145
+chr14_part1_spliceai_scores.tsv           982      981
+chr14_part2_spliceai_scores.tsv           982      981
+chr15_part1_spliceai_scores.tsv           956      955
+chr15_part2_spliceai_scores.tsv           956      955
+chr16_part1_spliceai_scores.tsv         1,343    1,342
+chr16_part2_spliceai_scores.tsv         1,342    1,341
+chr17_part1_spliceai_scores.tsv         1,163    1,162
+chr17_part2_spliceai_scores.tsv         1,163    1,162
+chr17_part3_spliceai_scores.tsv         1,161    1,160
+chr18_part1_spliceai_scores.tsv         1,055    1,054
+chr19_part1_spliceai_scores.tsv           913      912
+chr19_part2_spliceai_scores.tsv           913      912
+chr19_part3_spliceai_scores.tsv           912      911
+chr1_part1_spliceai_scores.tsv          1,750    1,749
+chr1_part2_spliceai_scores.tsv          1,750    1,749
+chr1_part3_spliceai_scores.tsv          1,748    1,747
+chr20_part1_spliceai_scores.tsv           951      950
+chr20_part2_spliceai_scores.tsv           951      950
+chr21_part1_spliceai_scores.tsv           717      716
+chr22_part1_spliceai_scores.tsv         1,053    1,052
+chr2_part1_spliceai_scores.tsv          1,520    1,519
+chr2_part2_spliceai_scores.tsv          1,520    1,519
+chr2_part3_spliceai_scores.tsv            759      758
+chr2_part4_spliceai_scores.tsv            760      759
+chr3_part1_spliceai_scores.tsv          1,091    1,090
+chr3_part2_spliceai_scores.tsv          1,091    1,090
+chr3_part3_spliceai_scores.tsv          1,091    1,090
+chr4_part1_spliceai_scores.tsv            645      644
+chr4_part2_spliceai_scores.tsv            645      644
+chr4_part3_spliceai_scores.tsv            645      644
+chr4_part4_spliceai_scores.tsv            645      644
+chr5_part1_spliceai_scores.tsv          1,297    1,296
+chr5_part2_spliceai_scores.tsv          1,297    1,296
+chr6_part1_spliceai_scores.tsv          1,387    1,386
+chr6_part2_spliceai_scores.tsv          1,386    1,385
+chr7_part1_spliceai_scores.tsv          1,235    1,234
+chr7_part2_spliceai_scores.tsv          1,235    1,234
+chr8_part1_spliceai_scores.tsv          1,001    1,000
+chr8_part2_spliceai_scores.tsv          1,000      999
+chr9_part1_spliceai_scores.tsv          1,018    1,017
+chr9_part2_spliceai_scores.tsv          1,018    1,017
+chrX_part1_spliceai_scores.tsv            798      797
+chrX_part2_spliceai_scores.tsv            798      797
+chrY_part1_spliceai_scores.tsv             77       76
+
+================================================================================
+BREAKDOWN BY CHROMOSOME
+================================================================================
+
+CHROMOSOME    FILES    TOTAL LINES    TOTAL DECOYS
+---------------------------------------------------
+chr1              3        5,248         5,245
+chr2              4        4,559         4,555
+chr3              3        3,273         3,270
+chr4              4        2,580         2,576
+chr5              2        2,594         2,592
+chr6              2        2,773         2,771
+chr7              2        2,470         2,468
+chr8              2        2,001         1,999
+chr9              2        2,036         2,034
+chr10             2        2,157         2,155
+chr11             3        3,011         3,008
+chr12             3        3,140         3,137
+chr13             1        1,146         1,145
+chr14             2        1,964         1,962
+chr15             2        1,912         1,910
+chr16             2        2,685         2,683
+chr17             3        3,487         3,484
+chr18             1        1,055         1,054
+chr19             3        2,738         2,735
+chr20             2        1,902         1,900
+chr21             1          717           716
+chr22             1        1,053         1,052
+chrX              2        1,596         1,594
+chrY              1           77            76
+---------------------------------------------------
+TOTAL            53       56,174        56,121
+
+================================================================================
+NOTES:
+- Each file has 1 header line + N data rows
+- Decoy count = Total lines - 1 (header)
+- Some decoy IDs may appear in multiple files (overlapping regions)
+- The combine_spliceai_tsv.py script will deduplicate and sort by decoyID
+================================================================================
+

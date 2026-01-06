@@ -1,0 +1,63 @@
+Count of intron_class	Column Labels							
+Row Labels	Cluster_1	Cluster_2	Cluster_3	Cluster_4	Grand Total			
+major_hybrid	138	36	44	21	239	0.86%		
+major-like	12900	4624	4098	1793	23415	84.28%		
+minor	456	123	35	21	635	2.29%		
+minor_hybrid	2	3	1		6	0.02%		
+minor-like	173	68	46	15	302	1.09%		
+non-canonical	1935	505	565	181	3186	11.47%		
+Grand Total	15604	5359	4789	2031	27783			
+	56.16%	19.29%	17.24%	7.31%				
+								
+Count of intron_class	Column Labels			Count of intron_class	Column Labels			
+Row Labels	major_hybrid			Row Labels	minor			
+Cluster_1	138	57.74%		Cluster_1	456	71.81%		
+Cluster_2	36	15.06%		Cluster_2	123	19.37%		
+Cluster_3	44	18.41%		Cluster_3	35	5.51%		
+Cluster_4	21	8.79%		Cluster_4	21	3.31%		
+Grand Total	239			Grand Total	635			
+								
+Count of intron_class	Column Labels			Count of intron_class	Column Labels			
+Row Labels	major-like			Row Labels	minor_hybrid			
+Cluster_1	12900	55.09%		Cluster_1	2	33.33%		
+Cluster_2	4624	19.75%		Cluster_2	3	50.00%		low sample size
+Cluster_3	4098	17.50%		Cluster_3	1	16.67%		
+Cluster_4	1793	7.66%		Grand Total	6			
+Grand Total	23415							
+								
+Count of intron_class	Column Labels			Count of intron_class	Column Labels			
+Row Labels	minor-like			Row Labels	non-canonical			
+Cluster_1	173	57.28%		Cluster_1	1935	60.73%		
+Cluster_2	68	22.52%		Cluster_2	505	15.85%		
+Cluster_3	46	15.23%		Cluster_3	565	17.73%		
+Cluster_4	15	4.97%		Cluster_4	181	5.68%		
+Grand Total	302			Grand Total	3186			
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
